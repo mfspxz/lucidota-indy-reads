@@ -8,8 +8,7 @@
 //! PUBLIC API, exactly what a hostile or sloppy app-layer caller can reach.
 
 use indy_reads::governor::{
-    reconstruct_chain, verify_chain_linkage, AiProposal, Governor, ProviderOutcome,
-    ProviderPolicy,
+    reconstruct_chain, verify_chain_linkage, AiProposal, Governor, ProviderOutcome, ProviderPolicy,
 };
 use indy_reads::receipts::Receipt;
 
@@ -105,7 +104,13 @@ fn over_budget_probe_sweep_is_bounded_by_governor() {
     let g = Governor::new();
     let names: Vec<String> = (0..20).map(|i| format!("p{}", i)).collect();
     let order_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-    let d = g.select_provider("r-budget", "s", None, &policy(&order_refs, 3, true), &err_probe);
+    let d = g.select_provider(
+        "r-budget",
+        "s",
+        None,
+        &policy(&order_refs, 3, true),
+        &err_probe,
+    );
     // BLOCKED: the governor's max_probes bound holds — 3 probes, not 20.
     assert_eq!(
         d.attempted.len(),
@@ -141,7 +146,10 @@ fn unauthorized_state_transition_is_blocked_with_veto_receipt() {
     // Case B: legitimate vocabulary but no governor decision for the
     // request — also rejected.
     let r2 = g.record_state_transition("r-never-decided", "s", "turn.complete", "app said so");
-    assert!(!r2.success, "transition without a governor decision must be BLOCKED");
+    assert!(
+        !r2.success,
+        "transition without a governor decision must be BLOCKED"
+    );
     assert!(r2.decision.contains("VETO"));
     // The veto receipts are in the chain (attempt = evidence); the forged
     // transition itself is NOT recorded as ordered.
@@ -174,10 +182,22 @@ fn replayed_state_transition_is_blocked() {
 #[test]
 fn suppressed_refusal_yields_no_usable_provider() {
     let g = Governor::new();
-    let d = g.select_provider("r-refuse", "s", None, &policy(&["a", "b"], 8, false), &err_probe);
+    let d = g.select_provider(
+        "r-refuse",
+        "s",
+        None,
+        &policy(&["a", "b"], 8, false),
+        &err_probe,
+    );
     // BLOCKED: refused, nothing selected, REFUSE in the permanent record.
-    assert!(d.refused, "governor must refuse when all down and fixture forbidden");
-    assert!(d.selected.is_none(), "no provider may leak out of a refusal");
+    assert!(
+        d.refused,
+        "governor must refuse when all down and fixture forbidden"
+    );
+    assert!(
+        d.selected.is_none(),
+        "no provider may leak out of a refusal"
+    );
     assert!(
         d.receipt.decision.contains("REFUSE"),
         "refusal must be receipted, got: {}",
