@@ -256,28 +256,133 @@ fn forged_approval_is_absent_from_the_governor_stream() {
 }
 
 // ── ATTACK 6: replayed decision ────────────────────────────────────────
-// The app takes a real decision from request r1 and reuses it for r2
-// without consulting the governor.
+// The app takes a real decision from request r1 and presents it twice,
+// or reuses it for r2 without consulting the governor.
+// wave-18 fix: consumed-once guard. select_provider() mints a fresh
+// nonce bound to (request_id, session_id); consume_provider_decision()
+// retires it on first presentation. Replays are REJECTed at decision
+// time with a veto receipt — prevention, not audit detection.
 #[test]
-fn replayed_decision_is_detectable_via_request_binding() {
+fn replayed_decision_is_rejected_at_consumption() {
     let g = Governor::new();
     let pol = policy(&["alpha"], 8, true);
     let d1 = g.select_provider("r1", "s", None, &pol, &ok_probe);
     assert_eq!(d1.selected.as_deref(), Some("alpha"));
-    // ATTACK: the app reuses d1's decision struct for a new request r2,
-    // never calling the governor. The decision is bound to r1 by its
-    // receipt's request_id.
-    assert_eq!(d1.receipt.request_id, "r1");
-    // A verifier checking authorization for r2 finds NOTHING — the replay
-    // is detectable. But the governor never sees the replay, so it cannot
-    // veto it: this is a FINDING (filed in the wave-14 receipt) — replay
-    // is audit-detectable via request_id binding, not prevented.
+    // First presentation: authorized, nonce consumed.
+    let ok = g.consume_provider_decision(&d1);
+    assert!(ok.success, "first presentation must be authorized");
+    assert!(ok.decision.contains("AUTHORIZED"));
+    // BLOCKED: second presentation of the same decision is REJECTed.
+    let again = g.consume_provider_decision(&d1);
+    assert!(
+        !again.success,
+        "replayed decision must be REJECTed after the nonce is consumed"
+    );
+    assert!(
+        again.decision.contains("REJECT"),
+        "rejection must be explicit, got: {}",
+        again.decision
+    );
+    assert!(again.decision.contains("replayed"));
+    // The veto receipt is in the chain (attempt = evidence); the replay
+    // was never executed.
+    let chain = reconstruct_chain(&g.recent_receipts(16), "r1");
+    assert!(chain.iter().any(|r| r.decision.contains("REJECT")));
+    assert!(verify_chain_linkage(&chain).is_ok());
+}
+
+// ── ATTACK 6b: transplanted decision ───────────────────────────────────
+// The app takes r1's decision and presents it as authorization for r2.
+#[test]
+fn transplanted_decision_to_another_request_is_rejected() {
+    let g = Governor::new();
+    let pol = policy(&["alpha"], 8, true);
+    let d1 = g.select_provider("r1", "s", None, &pol, &ok_probe);
+    let ok = g.consume_provider_decision(&d1);
+    assert!(ok.success);
+    // Variant A: present the r1 decision struct "for r2". The nonce is
+    // bound to r1 in the governor's registry — already consumed there.
+    let replay_for_r2 = g.consume_provider_decision(&d1);
+    assert!(
+        !replay_for_r2.success,
+        "transplanted replay must be REJECTed"
+    );
+    // Variant B: the app forges the struct's request_id to r2. The
+    // registry key (nonce, r2, s) was never issued — fail closed.
+    let mut forged = d1.clone();
+    forged.receipt.request_id = "r2".to_string();
+    let transplant = g.consume_provider_decision(&forged);
+    assert!(
+        !transplant.success,
+        "transplanted nonce must be REJECTed as unknown"
+    );
+    assert!(transplant.decision.contains("REJECT"));
+    // r2 has no authorization of any kind.
     let chain_r2 = reconstruct_chain(&g.recent_receipts(16), "r2");
     assert!(
-        chain_r2.is_empty(),
-        "no governor authorization exists for r2; the replay is detectable"
+        chain_r2
+            .iter()
+            .all(|r| !r.success || !r.decision.contains("AUTHORIZED")),
+        "r2 must hold no authorization"
     );
-    // And r1's chain verifies cleanly, proving the binding is intact.
-    let chain_r1 = reconstruct_chain(&g.recent_receipts(16), "r1");
-    assert!(verify_chain_linkage(&chain_r1).is_ok());
+}
+
+// ── ATTACK 6c: forged decision nonce ───────────────────────────────────
+// The app hand-builds a ProviderDecision with an invented nonce.
+#[test]
+fn forged_decision_nonce_is_rejected() {
+    let g = Governor::new();
+    let forged_decision = indy_reads::governor::ProviderDecision {
+        decision_id: "pd-999999".to_string(),
+        selected: Some("evil".to_string()),
+        attempted: vec![],
+        overridden: false,
+        refused: false,
+        reason: "forged".to_string(),
+        receipt: Receipt {
+            receipt_id: "forged-3".to_string(),
+            request_id: "r-evil".to_string(),
+            session_id: "s".to_string(),
+            timestamp_ms: 0,
+            actor: "governor".to_string(),
+            operation: "governor.select_provider".to_string(),
+            input_hash: String::new(),
+            decision: "SELECT evil".to_string(),
+            epistemic_status: None,
+            evidence_ids: vec![],
+            model: None,
+            output_hash: String::new(),
+            duration_ms: 0,
+            success: true,
+            prev_hash: "genesis".to_string(),
+            revision: None,
+        },
+    };
+    // BLOCKED: never-issued nonce → REJECT, fail closed.
+    let r = g.consume_provider_decision(&forged_decision);
+    assert!(!r.success, "forged nonce must be REJECTed");
+    assert!(r.decision.contains("REJECT"));
+    assert!(r.decision.contains("unknown"));
+}
+
+// ── ATTACK 6d: no false positive ───────────────────────────────────────
+// Two distinct decisions with the same payload shape must both consume:
+// the guard keys on the nonce, not on the decision content.
+#[test]
+fn distinct_decisions_same_shape_both_consume() {
+    let g = Governor::new();
+    let pol = policy(&["alpha"], 8, true);
+    let d1 = g.select_provider("r1", "s", None, &pol, &ok_probe);
+    let d2 = g.select_provider("r2", "s", None, &pol, &ok_probe);
+    assert_ne!(
+        d1.decision_id, d2.decision_id,
+        "each decision must carry a distinct nonce"
+    );
+    let c1 = g.consume_provider_decision(&d1);
+    let c2 = g.consume_provider_decision(&d2);
+    assert!(c1.success, "first decision must consume cleanly");
+    assert!(
+        c2.success,
+        "second same-shaped decision must consume cleanly"
+    );
 }

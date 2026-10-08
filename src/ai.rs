@@ -426,6 +426,22 @@ impl AiClient {
                 governor.select_provider(request_id, session_id, requested, &self.policy, &probe);
             overridden |= decision.overridden;
 
+            // Consumed-once guard: the decision is presented to the
+            // governor BEFORE the app acts on it. A replayed decision is
+            // REJECTed here — fail closed, same as a refusal. Selection
+            // alone authorizes nothing.
+            let consumption = governor.consume_provider_decision(&decision);
+            if !consumption.success {
+                return GovernedReply {
+                    reply: Self::refusal_reply(),
+                    provider: "rejected".to_string(),
+                    trail,
+                    refused: true,
+                    overridden,
+                    from_fixture: false,
+                };
+            }
+
             match decision.selected {
                 None => {
                     // Governor REFUSED. No provider, no fabrication.
@@ -877,15 +893,17 @@ mod failover_tests {
             ops,
             vec![
                 "governor.select_provider",
+                "governor.consume_provider_decision",
                 "provider.call",
                 "governor.select_provider",
+                "governor.consume_provider_decision",
                 "provider.call"
             ]
         );
-        assert!(chain[1].decision.contains("FAILED alpha kind=Timeout"));
-        assert!(chain[1].decision.contains("Timeout"));
-        assert!(!chain[1].success);
-        assert!(chain[3].success);
+        assert!(chain[2].decision.contains("FAILED alpha kind=Timeout"));
+        assert!(chain[2].decision.contains("Timeout"));
+        assert!(!chain[2].success);
+        assert!(chain[5].success);
         assert!(verify_chain_linkage(&chain).is_ok());
     }
 
@@ -910,7 +928,7 @@ mod failover_tests {
         assert_eq!(r.provider, "beta");
         assert_eq!(r.trail[0], ("alpha".to_string(), "Malformed".to_string()));
         let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
-        assert!(chain[1].decision.contains("kind=Malformed"));
+        assert!(chain[2].decision.contains("kind=Malformed"));
         assert!(verify_chain_linkage(&chain).is_ok());
     }
 
@@ -935,7 +953,7 @@ mod failover_tests {
         assert_eq!(r.provider, "beta");
         assert_eq!(r.trail[0], ("alpha".to_string(), "RateLimited".to_string()));
         let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
-        assert!(chain[1].decision.contains("kind=RateLimited"));
+        assert!(chain[2].decision.contains("kind=RateLimited"));
         assert!(verify_chain_linkage(&chain).is_ok());
     }
 
@@ -967,10 +985,10 @@ mod failover_tests {
         assert_eq!(r.trail.len(), 3);
         assert_eq!(r.trail[2], ("gamma".to_string(), "ok".to_string()));
         let chain = reconstruct_chain(&g.recent_receipts(12), "r1");
-        assert_eq!(chain.len(), 6); // 3 selects + 3 provider.call receipts
+        assert_eq!(chain.len(), 9); // 3 selects + 3 consumes + 3 provider.call receipts
         assert!(verify_chain_linkage(&chain).is_ok());
         // The final select is a FAILOVER naming the whole trail.
-        assert!(chain[4].decision.starts_with("FAILOVER"));
+        assert!(chain[6].decision.starts_with("FAILOVER"));
     }
 
     #[tokio::test]
@@ -1017,7 +1035,7 @@ mod failover_tests {
         }
         assert_eq!(r1.provider, r2.provider, "fallback must be deterministic");
         let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
-        assert!(chain.iter().any(|r| r.decision == "FIXTURE"));
+        assert!(chain.iter().any(|r| r.decision.starts_with("FIXTURE")));
         assert!(verify_chain_linkage(&chain).is_ok());
     }
 
@@ -1038,7 +1056,7 @@ mod failover_tests {
         assert_eq!(r.reply.proposal.intent, "refuse");
         assert!(r.reply.reply.contains("forbids making something up"));
         let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
-        assert!(chain.iter().any(|r| r.decision == "REFUSE"));
+        assert!(chain.iter().any(|r| r.decision.starts_with("REFUSE")));
         assert!(verify_chain_linkage(&chain).is_ok());
     }
 
@@ -1124,14 +1142,16 @@ mod failover_tests {
         assert_eq!(r.provider, "beta");
 
         let chain = reconstruct_chain(&g.recent_receipts(16), "r-chain-1");
-        assert_eq!(chain.len(), 4);
+        assert_eq!(chain.len(), 6);
         let ops: Vec<&str> = chain.iter().map(|r| r.operation.as_str()).collect();
         assert_eq!(
             ops,
             vec![
                 "governor.select_provider",
+                "governor.consume_provider_decision",
                 "provider.call",
                 "governor.select_provider",
+                "governor.consume_provider_decision",
                 "provider.call"
             ]
         );
@@ -1139,12 +1159,12 @@ mod failover_tests {
         assert!(chain.iter().all(|r| r.request_id == "r-chain-1"));
         assert!(chain.iter().all(|r| r.session_id == "s-test"));
         // The failure is classified in the permanent record.
-        assert!(chain[1]
+        assert!(chain[2]
             .decision
             .contains("FAILED alpha kind=HttpStatus(500)"));
-        assert!(!chain[1].success);
-        assert!(chain[3].decision.contains("OK beta"));
-        assert!(chain[3].success);
+        assert!(!chain[2].success);
+        assert!(chain[5].decision.contains("OK beta"));
+        assert!(chain[5].success);
         // Hash linkage verifies end to end.
         assert!(verify_chain_linkage(&chain).is_ok());
     }

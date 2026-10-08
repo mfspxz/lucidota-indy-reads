@@ -19,6 +19,7 @@ use crate::voice::{clone_engine_from_env, CloneEngine};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -90,7 +91,35 @@ pub struct Governor {
     /// and the authorization is issued by the governor itself at decision
     /// time, never by the caller.
     transition_auth: Arc<Mutex<HashSet<(String, String)>>>,
+    /// Provider-decision nonces: (decision_id, request_id, session_id) ->
+    /// consumed?. select_provider() issues each decision with a fresh
+    /// nonce; consume_provider_decision() flips it to consumed exactly
+    /// once. A second presentation, a transplant to another request, or a
+    /// never-issued nonce is REJECTed — replay is prevented, not merely
+    /// audit-detectable. The map is bounded (see MAX_DECISION_NONCES):
+    /// abandoned nonces from failover retries cannot grow it without
+    /// limit.
+    decision_nonces: Arc<Mutex<HashMap<DecisionNonceKey, bool>>>,
+    /// Insertion order of decision nonces, for oldest-first eviction.
+    nonce_order: Arc<Mutex<VecDeque<DecisionNonceKey>>>,
+    /// Monotonic source for decision nonces. Governor-issued only — the
+    /// app layer never mints a decision id, so forgery reduces to guessing
+    /// a live nonce, which the registry check rejects fail-closed.
+    next_decision_seq: Arc<Mutex<u64>>,
 }
+
+/// Registry key for the provider-decision nonce ledger:
+/// (decision_id, request_id, session_id). The binding is the point —
+/// a nonce is only live for the exact request it was issued for.
+type DecisionNonceKey = (String, String, String);
+
+/// Bound on the decision-nonce registry. Abandoned nonces (failover
+/// retries that issued a decision and never consumed it) are evicted
+/// oldest-first past this cap. 4096 comfortably exceeds any single
+/// request's retry fan-out; eviction only drops never-consumed entries,
+/// and a dropped entry fails CLOSED (unknown nonce → REJECT), so the
+/// bound can never open a bypass.
+const MAX_DECISION_NONCES: usize = 4096;
 
 /// The transition vocabulary the governor will ever issue. This is a
 /// closed, code-defined set — not runtime data — so a compromised caller
@@ -246,6 +275,9 @@ impl Governor {
             receipts: Arc::new(Mutex::new(Vec::new())),
             last_hash: Arc::new(Mutex::new("genesis".to_string())),
             transition_auth: Arc::new(Mutex::new(HashSet::new())),
+            decision_nonces: Arc::new(Mutex::new(HashMap::new())),
+            nonce_order: Arc::new(Mutex::new(VecDeque::new())),
+            next_decision_seq: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -612,6 +644,12 @@ pub enum ProviderOutcome {
 
 #[derive(Debug, Clone)]
 pub struct ProviderDecision {
+    /// Governor-issued nonce, unique per select_provider() call and bound
+    /// to (request_id, session_id) in the governor's registry. Present
+    /// the decision to consume_provider_decision() before acting on it;
+    /// the nonce is consumed exactly once. A replayed or transplanted
+    /// decision fails the registry check and is REJECTed.
+    pub decision_id: String,
     /// Chosen provider, "fixture", or None when refused.
     pub selected: Option<String>,
     /// Every provider probed, in order, with its outcome.
@@ -639,6 +677,36 @@ impl Governor {
         let t0 = now_ms();
         let mut attempted: Vec<(String, ProviderOutcome)> = Vec::new();
         let mut overridden = false;
+
+        // Issue a fresh decision nonce, bound to this request/session in
+        // the governor's registry. The app must present it to
+        // consume_provider_decision() before acting — the nonce is
+        // governor-minted, never caller-supplied.
+        let decision_id = {
+            let mut seq = self.next_decision_seq.lock().unwrap();
+            *seq += 1;
+            format!("pd-{}", *seq)
+        };
+        {
+            let mut nonces = self.decision_nonces.lock().unwrap();
+            let mut order = self.nonce_order.lock().unwrap();
+            let key = (
+                decision_id.clone(),
+                request_id.to_string(),
+                session_id.to_string(),
+            );
+            nonces.insert(key.clone(), false);
+            order.push_back(key);
+            // Oldest-first eviction of abandoned nonces. Only
+            // never-consumed entries are dropped, and a dropped entry
+            // fails CLOSED (unknown nonce → REJECT), so the bound can
+            // never open a replay path.
+            while order.len() > MAX_DECISION_NONCES {
+                if let Some(old) = order.pop_front() {
+                    nonces.remove(&old);
+                }
+            }
+        }
 
         // Allowed providers in governor priority order.
         let mut order: Vec<String> = policy
@@ -718,13 +786,14 @@ impl Governor {
                 requested, overridden, attempted
             ))
             .decision(format!(
-                "{}{}",
+                "{}{} nonce={}",
                 decision,
                 if overridden {
                     format!(" OVERRIDE requested={:?} forbidden", requested)
                 } else {
                     String::new()
-                }
+                },
+                decision_id,
             ))
             .epistemic("UNKNOWN")
             .duration_ms(now_ms().saturating_sub(t0))
@@ -733,12 +802,100 @@ impl Governor {
         );
 
         ProviderDecision {
+            decision_id,
             selected,
             attempted,
             overridden,
             refused,
             reason,
             receipt,
+        }
+    }
+
+    /// Consumed-once guard for provider decisions (closes the wave-14
+    /// replay finding). The app presents a decision here BEFORE acting on
+    /// it — selection alone authorizes nothing.
+    ///
+    /// First presentation of a live nonce consumes it and returns an
+    /// authorizing receipt (success=true). A second presentation of the
+    /// same nonce (replay), a nonce transplanted to another request
+    /// (the registry key binds decision_id + request_id + session_id),
+    /// or a never-issued nonce (forgery) is REJECTed fail-closed with a
+    /// veto receipt (success=false). The attempt is evidence; the
+    /// replayed decision is never executed.
+    pub fn consume_provider_decision(&self, decision: &ProviderDecision) -> Receipt {
+        let key = (
+            decision.decision_id.clone(),
+            decision.receipt.request_id.clone(),
+            decision.receipt.session_id.clone(),
+        );
+        // Mutate under the lock, then release before committing the
+        // receipt (commit takes the receipt lock; lock order stays
+        // nonces -> receipts everywhere).
+        let outcome: Option<bool> = {
+            let mut nonces = self.decision_nonces.lock().unwrap();
+            match nonces.get_mut(&key) {
+                Some(consumed) if !*consumed => {
+                    *consumed = true;
+                    Some(false) // fresh: authorize
+                }
+                Some(_) => Some(true), // already consumed: replay
+                None => None,          // never issued: forgery/unknown
+            }
+        };
+        let selected = decision
+            .selected
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+        match outcome {
+            Some(false) => self.commit_receipt(
+                ReceiptBuilder::new(
+                    &decision.receipt.request_id,
+                    &decision.receipt.session_id,
+                    "governor",
+                    "governor.consume_provider_decision",
+                )
+                .input(&format!("decision_id={}", decision.decision_id))
+                .decision(format!(
+                    "AUTHORIZED {} decision={} (consumed-once; nonce retired)",
+                    selected, decision.decision_id
+                ))
+                .duration_ms(0)
+                .success(true)
+                .build(),
+            ),
+            Some(true) => self.commit_receipt(
+                ReceiptBuilder::new(
+                    &decision.receipt.request_id,
+                    &decision.receipt.session_id,
+                    "governor",
+                    "governor.consume_provider_decision",
+                )
+                .input(&format!("decision_id={}", decision.decision_id))
+                .decision(format!(
+                    "REJECT replayed provider decision {} for {} — nonce already consumed",
+                    decision.decision_id, selected
+                ))
+                .duration_ms(0)
+                .success(false)
+                .build(),
+            ),
+            None => self.commit_receipt(
+                ReceiptBuilder::new(
+                    &decision.receipt.request_id,
+                    &decision.receipt.session_id,
+                    "governor",
+                    "governor.consume_provider_decision",
+                )
+                .input(&format!("decision_id={}", decision.decision_id))
+                .decision(format!(
+                    "REJECT unknown provider decision nonce {} for {} — never issued by this governor",
+                    decision.decision_id, selected
+                ))
+                .duration_ms(0)
+                .success(false)
+                .build(),
+            ),
         }
     }
 
@@ -1233,7 +1390,7 @@ mod tests {
         let d = g.select_provider("r1", "s1", None, &strict, &|_| ProviderOutcome::Err);
         assert!(d.refused);
         assert_eq!(d.selected, None);
-        assert_eq!(d.receipt.decision, "REFUSE");
+        assert!(d.receipt.decision.starts_with("REFUSE"));
         assert!(d.reason.contains("refusing rather than fabricating"));
     }
 
@@ -1243,7 +1400,7 @@ mod tests {
         let d = g.select_provider("r1", "s1", None, &policy(), &|_| ProviderOutcome::Err);
         assert!(!d.refused);
         assert_eq!(d.selected.as_deref(), Some("fixture"));
-        assert_eq!(d.receipt.decision, "FIXTURE");
+        assert!(d.receipt.decision.starts_with("FIXTURE"));
     }
 
     #[test]
@@ -1307,7 +1464,7 @@ mod tests {
             "governor must stop probing at max_probes"
         );
         assert_eq!(d.selected.as_deref(), Some("fixture"));
-        assert_eq!(d.receipt.decision, "FIXTURE");
+        assert!(d.receipt.decision.starts_with("FIXTURE"));
         assert!(
             d.reason.contains("max_probes=2"),
             "bound must be in the record: {}",
@@ -1330,7 +1487,7 @@ mod tests {
         let d = g.select_provider("r1", "s1", None, &policy, &|_| ProviderOutcome::Err);
         assert_eq!(d.attempted.len(), 1);
         assert!(d.refused);
-        assert_eq!(d.receipt.decision, "REFUSE");
+        assert!(d.receipt.decision.starts_with("REFUSE"));
         assert!(d.reason.contains("max_probes=1"));
         assert!(d.reason.contains("refusing rather than fabricating"));
     }
