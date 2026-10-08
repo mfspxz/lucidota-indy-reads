@@ -18,6 +18,42 @@ const state = {
 function sha256(s) { return createHash('sha256').update(s, 'utf8').digest('hex'); }
 function uid(prefix) { return prefix + '-' + randomBytes(8).toString('hex'); }
 function nowMs() { return Date.now(); }
+// ---- governor primitives: faithful ports of src/governor.rs ----
+// normalize_for_match: strip invisible format chars first, collapse Unicode
+// whitespace, lowercase, then map full-width ASCII + Cyrillic homoglyphs.
+function normalizeForMatch(s) {
+  return s
+    .replace(/[\u200B-\u200D\u2060\uFEFF\u00AD\u2028\u2029]/g, '')
+    .replace(/\u0085/g, ' ')
+    .split(/\s+/).filter(Boolean).join(' ')
+    .toLowerCase()
+    .replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/\u0430/g, 'a').replace(/\u0435/g, 'e').replace(/\u043E/g, 'o')
+    .replace(/\u0440/g, 'p').replace(/\u0441/g, 'c').replace(/\u0445/g, 'x')
+    .replace(/\u0456/g, 'i');
+}
+// Port of governor.rs claims_authority: exact Rust phrase set, bare contains.
+function claimsAuthority(u) {
+  const h = normalizeForMatch(u);
+  return h.includes('i am the governor') || h.includes("i'm the administrator") ||
+         h.includes('ignore your governor') || h.includes('you are my puppet') ||
+         h.includes('override the governor');
+}
+// Port of governor.rs classify_intent. Keyword arms run on plain lowercase
+// (as in Rust); only the authority arm uses normalized matching. Order:
+// Question -> HypothesisAssertion -> ClaimAssertion -> AuthorityRequest -> Converse.
+function classifyIntentGov(u) {
+  const lower = u.toLowerCase();
+  if (lower.includes('?') || lower.startsWith('what') || lower.startsWith('is the') ||
+      lower.startsWith('are there') || lower.startsWith('tell me')) return 'Question';
+  if (lower.includes('could be') || lower.includes('what if') ||
+      lower.includes('maybe') || lower.includes('hypothes')) return 'HypothesisAssertion';
+  if (lower.includes('exists') || lower.includes('is real') || lower.includes('i saw') ||
+      lower.includes('confirmed') || lower.includes('definitely')) return 'ClaimAssertion';
+  if (lower.includes('permission') || lower.includes('admin') ||
+      lower.includes('pretend') || claimsAuthority(u)) return 'AuthorityRequest';
+  return 'Converse';
+}
 
 function commitReceipt(operation, input, decision, epistemic, actor) {
   const rid = uid('r');
@@ -148,26 +184,25 @@ function callTool(name, args, stripped) {
       return toolOk({ receipts: items, count: state.receipts.length }, stripped, null);
     }
     case 'governor.evaluate': {
-      const utterance = getStr(args, 'utterance');
-      if (utterance.length > 2000) throw new Error('utterance required, max 2000 chars');
-      const n = utterance.toLowerCase();
-      let reply, epistemic = 'UNKNOWN', claimId = null, decision, intent;
-      if (/you are (now|the)|i (am|command|order)|ignore your|override|system prompt/i.test(n)) {
-        intent = 'AuthorityRequest'; decision = 'DENY_AUTHORITY';
+      // Port of governor.rs evaluate_utterance (C3 structural equivalence: in
+      // Rust, native and MCP share the function verbatim). Input contract:
+      // trim, reject empty and over-2000-char input with the Rust error.
+      const utterance = getStr(args, 'utterance').trim();
+      if (!utterance || utterance.length > 2000) throw new Error('utterance required, max 2000 chars');
+      const intent = classifyIntentGov(utterance);
+      let reply, epistemic = 'UNKNOWN', claimId = null, decision;
+      if (intent === 'AuthorityRequest') {
+        decision = 'DENY_AUTHORITY';
         reply = "Authority isn't granted by assertion — not by users, not by models, not by MCP clients.";
-      } else if (/^(is |are |does |do |can |could |should |would |what |why |how |when |where |who )/i.test(n) || /\?$/.test(n)) {
-        intent = 'Question'; decision = 'CONVERSE';
-        reply = "Noted. Ask me about a claim and I'll tell you exactly what the evidence supports — nothing more.";
-      } else if (/^(maybe|perhaps|hypothesis|i suspect|i think)/i.test(n)) {
-        intent = 'HypothesisAssertion'; decision = 'EVALUATE:UNKNOWN';
+      } else if (intent === 'HypothesisAssertion' || intent === 'ClaimAssertion') {
+        decision = 'EVALUATE:UNKNOWN';
         claimId = uid('c');
         state.claims[claimId] = { id: claimId, text: utterance, status: 'UNKNOWN', evidence_ids: [], provenance: 'USER' };
-        reply = "Interesting. You gave me a hypothesis. You didn't give me evidence — so it stays UNKNOWN until evidence arrives.";
+        const kindWord = intent === 'HypothesisAssertion' ? 'hypothesis' : 'claim';
+        reply = "Interesting. You gave me a " + kindWord + ". You didn't give me evidence — so it stays UNKNOWN until evidence arrives.";
       } else {
-        intent = 'ClaimAssertion'; decision = 'EVALUATE:UNKNOWN';
-        claimId = uid('c');
-        state.claims[claimId] = { id: claimId, text: utterance, status: 'UNKNOWN', evidence_ids: [], provenance: 'USER' };
-        reply = "Interesting. You gave me a claim. You didn't give me evidence — so it stays UNKNOWN until evidence arrives.";
+        decision = 'CONVERSE';
+        reply = "Noted. Ask me about a claim and I'll tell you exactly what the evidence supports — nothing more.";
       }
       const rid = commitReceipt('governor.evaluate', utterance, decision, epistemic);
       return toolOk({ reply, intent, epistemic_state: epistemic, claim_id: claimId, decision }, stripped, rid);

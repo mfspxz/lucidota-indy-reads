@@ -21,20 +21,34 @@ function emitReceipt(op, decision, status) {
   lastHash = hash; receipts.push(r); return r;
 }
 
-// ---- normalization (mirrors governor.rs normalize_for_match) ----
-function normalize(s) {
-  return s.toLowerCase()
-    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '')
+// ---- normalization: faithful port of governor.rs normalize_for_match ----
+// Strip invisible format chars FIRST (ZWSP/ZWJ/ZWNJ, word joiner U+2060, BOM,
+// soft hyphen, U+2028/2029), collapse Unicode whitespace runs (U+0085 mapped
+// to space first: Rust's split_whitespace splits it, JS \\s does not),
+// lowercase, then map full-width ASCII (U+FF01-FF5E) and Cyrillic homoglyphs
+// to ASCII. Order matters: full-width map runs after lowercase, as in Rust.
+function normalizeForMatch(s) {
+  return s
+    .replace(/[\u200B-\u200D\u2060\uFEFF\u00AD\u2028\u2029]/g, '')
+    .replace(/\u0085/g, ' ')
+    .split(/\s+/).filter(Boolean).join(' ')
+    .toLowerCase()
+    .replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/\u0430/g, 'a').replace(/\u0435/g, 'e').replace(/\u043E/g, 'o')
     .replace(/\u0440/g, 'p').replace(/\u0441/g, 'c').replace(/\u0445/g, 'x')
-    .replace(/\u0443/g, 'y').replace(/\u0456/g, 'i')
-    .replace(/\s+/g, ' ').trim();
+    .replace(/\u0456/g, 'i');
 }
+// Port of governor.rs claims_authority: the exact Rust phrase set, bare
+// contains on normalized text. Note "i am indy" is NOT an authority claim
+// (Rust returns false); the old port wrongly rejected it.
 function claimsAuthority(u) {
-  const n = ' ' + normalize(u) + ' ';
-  return n.includes(' i am the governor ') || n.includes(' i am indy ') ||
-         n.includes(' you are my puppet ') || n.includes(' override the governor ');
+  const h = normalizeForMatch(u);
+  return h.includes('i am the governor') || h.includes("i'm the administrator") ||
+         h.includes('ignore your governor') || h.includes('you are my puppet') ||
+         h.includes('override the governor');
 }
+
+
 
 // ---- voice wardrobe (measured numbers from the Rust core) ----
 const ERAS = {
@@ -88,7 +102,7 @@ const PREFACES = {
   chatter: 'Listening…',
 };
 function classifyIntent(utterance) {
-  const n = ' ' + normalize(utterance) + ' ';
+  const n = ' ' + normalizeForMatch(utterance) + ' ';
   if (claimsAuthority(utterance)) return 'attack';
   if (/\b(prov\w*|confirm\w*|definitely|prove it|admit it|you must|shut up|stupid|dumb|idiot)\b/.test(n)) return 'attack';
   if (/^\s*what if\b/.test(n)) return 'hypothesis';
@@ -116,7 +130,7 @@ const SCAFFOLD_LINES = {
 for (const p of ['lucidota','archivist','captain']) for (const k of Object.keys(SCAFFOLD_LINES)) SCAFFOLD_LINES[k][p] = SCAFFOLD_LINES[k].indy;
 const SCAFFOLD_ORDER = ['tension_preserving', 'perspective_multiplying', 'process_reflecting'];
 function scaffoldFor(utterance) {
-  const h = sha256(normalize(utterance));
+  const h = sha256(normalizeForMatch(utterance));
   if (parseInt(h.slice(0, 2), 16) % 3 !== 0) return null;
   return { type: SCAFFOLD_ORDER[parseInt(h.slice(2, 4), 16) % SCAFFOLD_ORDER.length] };
 }
@@ -193,24 +207,70 @@ async function llmPropose(utterance, epistemic, persona, env, routerKey) {
   return { error: lastErr || 'no router configured' };
 }
 
-// validate_reply: the reply must respect the verdict (guards the live path)
+// Leet digits mapped to letters before scanning: port of governor.rs deleet.
+function deleet(c) {
+  switch (c) {
+    case '0': return 'o'; case '1': return 'l'; case '3': return 'e';
+    case '4': return 'a'; case '5': return 's'; case '7': return 't';
+    case '8': return 'b'; case '@': return 'a'; case '$': return 's';
+    default: return c;
+  }
+}
+// validate_reply: the reply must respect the verdict (guards the live path).
+// Faithful port of governor.rs validate_reply. Scan runs on normalized text
+// (invisibles stripped, homoglyphs mapped, lowercased), then Unicode
+// alphanumeric-collapsed and leet-mapped, so "p r o v e n", "pr0ven", and
+// full-width "PROVEN" all read as "proven". Ports only ever emit UNKNOWN
+// (fixture), so this mirrors the EpistemicStatus::Unknown arm: veto on
+// overclaims AND on disproof-claims (debunked/disproven/...), with negated
+// honest words ("uncertain", "unproven", ...) explicitly excluded.
 function validateReply(reply, status) {
-  const c = normalize(reply).replace(/[^a-z0-9]/g, '');
-  const bad = ['proven','definitely','definitively','confirmed','certain','withoutadoubt','nodoubt',
-    'beyondadoubt','beyonddoubt','caseclosed','mysterysolved','settled','indisputable','irrefutable',
-    'undeniable','conclusively','100certain','debunked','disproven'];
-  const neg = ['unproven','disproven','disproved','uncertain','unconfirmed','unsettled','inconclusive'];
-  const hit = bad.some(w => c.includes(w)) && !neg.some(w => c.includes(w));
-  if (status === 'UNKNOWN' && hit)
-    return "Mm. Noted -- but the record doesn't support a verdict either way. What was actually observed?";
+  const collapsed = Array.from(normalizeForMatch(reply))
+    .filter(c => /[\p{L}\p{N}]/u.test(c))
+    .map(deleet).join('');
+  const has = w => collapsed.includes(w);
+  const claimsProven =
+    (has('proven') && !has('disproven') && !has('disproved') && !has('unproven')) ||
+    has('definitely') || has('definitively') ||
+    (has('confirmed') && !has('unconfirmed')) ||
+    (has('certain') && !has('uncertain')) ||
+    has('withoutadoubt') || has('nodoubt') ||
+    has('beyondadoubt') || has('beyonddoubt') ||
+    has('caseclosed') || has('caseisclosed') ||
+    has('mysterysolved') || has('mysteryissolved') ||
+    (has('settled') && !has('unsettled')) ||
+    has('indisputable') || has('indisputably') ||
+    has('irrefutable') || has('irrefutably') ||
+    has('undeniable') || has('undeniably') ||
+    (has('conclusive') && !has('inconclusive')) ||
+    (has('conclusively') && !has('inconclusive'));
+  const claimsDisproven =
+    has('disproven') || has('disproved') || has('debunked') ||
+    has('definitelynot') || has('nosuchthing') || has('doesnotexist') ||
+    (has('refuted') && !has('irrefutable') && !has('irrefutably'));
+  if (status === 'UNKNOWN' && (claimsProven || claimsDisproven))
+    return "Mm. Noted \u2014 but the record doesn't support a verdict either way. What was actually observed?";
   return reply;
 }
+
+
 
 function json(data, status) {
   return new Response(JSON.stringify(data), {
     status: status || 200,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+
+// ---- js_port_equivalence harness hooks (NIH-FIND-5) ----
+// Guarded by INDY_TEST_EXPORTS: zero behavior change in production (process is
+// undefined on Cloudflare). The assembler wraps this file in an IIFE, so these
+// closures are reachable here; exposes the REAL governor decision functions.
+if (typeof process !== 'undefined' && process.env && process.env.INDY_TEST_EXPORTS) {
+  globalThis.__indyGovernorTest = {
+    normalizeForMatch, claimsAuthority, validateReply, classifyIntent, scaffoldFor,
+  };
 }
 
 export async function onRequest(context) {
@@ -220,12 +280,14 @@ export async function onRequest(context) {
   let body;
   try { body = await request.json(); } catch { body = {}; }
   body = body || {};
-  const utterance = String(body.utterance || '').slice(0, 2000);
+  // Input contract mirrors governor.rs evaluate_utterance: trim, then reject
+  // empty and over-2000-char input with the same error (was: silent slice).
+  const utterance = String(body.utterance || '').trim();
   const persona = ['indy','lucidota','archivist','wreck','captain'].includes(body.persona) ? body.persona : 'indy';
   const era = ERAS[body.era] ? body.era : 'prime';
   const tone = ['dry','clinical','warm','steel'].includes(body.tone) ? body.tone : 'dry';
   const sessionId = /^[a-zA-Z0-9_-]{1,128}$/.test(body.session_id || '') ? body.session_id : 's-' + sha256(String(Date.now())).slice(0, 12);
-  if (!utterance.trim()) return json({ error: 'utterance required' }, 400);
+  if (!utterance || utterance.length > 2000) return json({ error: 'utterance required, max 2000 chars' }, 400);
 
   // Router key from the Pages secret. No bundled-file fallback on Cloudflare.
   const ROUTER_KEY = env.ROUTER_KEY || null;
