@@ -35,8 +35,22 @@ A `no-vcs` or dirty build is UNKNOWN provenance, never "proven".
 |---|---|---|
 | source | this repo, tag `provenance-baseline` → commit `d71a5b7944e4ae27db320f6fbae29328a096a20f` | PROVEN (immutable tag) |
 | build | `cargo build --release` on the VM | PROVEN (binary carries hash) |
-| deploy (demo) | https://indy-reads-ui-maroonedpilot-8906.vercel.app/voice.html | PROVEN (live, hash-verified Oct 7) |
+| deploy (demo) | https://indy-reads-ui-maroonedpilot-8906.vercel.app/voice.html | LIVE (responding 2026-10-08 ~13:05 PDT: page title "Indy — talk to her"; `/api/health` → `{"service":"indy-reads","status":"ok","mode":"fixture","router_key":true}`) — build identity UNKNOWN (health carries no commit hash; predates provenance chain) |
 | runtime | `GET /health` → compare `commit` | verify per deploy |
+
+## Test evidence (measured, 2026-10-08)
+
+- Baseline `cargo test` 12:56 PDT: **149 green, 0 failed** (139 lib + 10 bin).
+  The work-order's "143 tests passing" is DENIED as a count — measured 149.
+  (The 143 figure was asserted, never measured; it is superseded.)
+- After C2/C4/C5 wiring (governor-controlled provider selection, classified
+  failover, receipt-chain reconstruction): **166 green, 0 failed**
+  (144 lib + 22 bin), commit `<HEAD>`.
+- Live smoke (local binary, fixture mode): `/health` commit ==
+  `git rev-parse HEAD`, dirty=false; one turn → `provider: fixture`,
+  `provider_trail: ["fixture:ok"]`; `/api/receipts` chain
+  `governor.select_provider → provider.call → governor.decide → turn.state`
+  hash-verified VALID (independent sha256 recomputation).
 
 ## Verifying a deployment
 
@@ -53,5 +67,14 @@ curl -s http://localhost:8080/health | python3 -c "import json,sys; print(json.l
 - The Vercel demo deployment's build provenance predates this chain; its
   `/api/health` does not yet serve the commit hash. Until redeployed from
   a provenance-carrying build, treat its build identity as UNKNOWN.
+  (Re-probed 2026-10-08: live and responding, but still no commit hash —
+  deployment = DEPLOYED/responding, source identity = UNKNOWN.)
 - `dirty_worktree=true` builds are reproducible in content but not in
   identity — commit before release builds.
+- Release discipline is not CI-enforced (no gate prevents shipping a
+  no-vcs or dirty build). The provenance exists; the enforcement doesn't.
+- CLOSED 2026-10-08: `select_provider` is now wired into the live turn path
+  (`AiClient::interpret_governed`, called from the turn handler). Provider
+  selection, failover, and refusal are governor decisions with receipts,
+  not app convention. The old `interpret()` (try-router-then-fixture) is
+  deleted.

@@ -1,8 +1,9 @@
 //! Indy_Reads server: Axum HTTP + WebSocket, static web UI.
 //!
 //! Pipeline per turn:
-//!   utterance -> governor.decide -> ai.interpret -> validate -> response -> receipt
-//! Every step emits a receipt. The receipt stream goes over WebSocket.
+//!   utterance -> governor.select_provider -> provider.call -> governor.decide
+//!     -> validate -> response -> turn.state -> receipt
+//! Every step emits a hash-chained receipt. The receipt stream goes over WebSocket.
 
 mod ai;
 mod api;

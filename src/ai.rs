@@ -4,12 +4,73 @@
 //! It NEVER decides authority, truth, or permission. Its output is a
 //! PROPOSAL to the governor, nothing more.
 //!
+//! PROVIDER CONTROL PATH (C4): the governor — not this module's convention —
+//! controls provider selection, failover, and refusal. interpret_governed()
+//! is the real control path: every turn runs Governor::select_provider, each
+//! generate() attempt is classified and receipted via
+//! Governor::record_provider_result, and failover re-enters the governor.
 //! If ROUTER_KEY is unset, the client runs in deterministic fixture mode
 //! so the governor/UI demo survives provider failure.
 
-use indy_reads::governor::AiProposal;
+use indy_reads::governor::{AiProposal, Governor, ProviderOutcome, ProviderPolicy};
+use indy_reads::receipts::now_ms;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// Classified provider failure. The kind — not a log line — is what the
+/// governor records in the receipt and what drives deterministic failover.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenErrorKind {
+    /// The provider did not answer in time.
+    Timeout,
+    /// HTTP 429: the provider is throttling us.
+    RateLimited,
+    /// The provider answered, but the envelope violated the contract
+    /// (not JSON, or JSON that doesn't parse).
+    Malformed,
+    /// The provider is unreachable (DNS, refused connection, TLS).
+    Unavailable,
+    /// Any other non-2xx HTTP status.
+    HttpStatus(u16),
+}
+
+#[derive(Debug, Clone)]
+pub struct GenError {
+    pub kind: GenErrorKind,
+    pub msg: String,
+}
+
+impl GenError {
+    fn new(kind: GenErrorKind, msg: impl Into<String>) -> Self {
+        Self { kind, msg: msg.into() }
+    }
+}
+
+impl std::fmt::Display for GenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.kind, self.msg)
+    }
+}
+
+impl std::error::Error for GenError {}
+
+/// A provider backend. probe() is cheap and network-free (key present,
+/// URL configured) — it is what the governor's failover loop consults.
+/// generate() does the actual work and classifies every failure.
+pub trait Backend: Send + Sync {
+    fn name(&self) -> &str;
+    fn probe(&self) -> ProviderOutcome;
+    fn generate<'a>(
+        &'a self,
+        utterance: &'a str,
+        epistemic_hint: &'a str,
+        system_prompt: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<AiReply, GenError>> + Send + 'a>>;
+}
 
 /// Process-wide fixture turn counter: HER schedule, not the user's words.
 static FIXTURE_TURNS: AtomicU64 = AtomicU64::new(0);
@@ -85,54 +146,39 @@ pub struct AiReply {
     pub reply: String,
 }
 
-pub struct AiClient {
-    router_url: String,
-    router_key: Option<String>,
+/// Deterministic refusal text. The governor refused rather than fabricate;
+/// the text says exactly that, nothing more.
+const REFUSAL_TEXT: &str = "I can't reach any provider right now, and my policy forbids making something up. Try again in a bit.";
+
+/// One HTTP provider lane (ai-router, openrouter, nvidia, ...).
+/// probe() is key/config presence only — no network, deterministic.
+pub struct RouterBackend {
+    name: String,
+    url: String,
+    key: String,
     model: String,
+    timeout_secs: u64,
     http: reqwest::Client,
 }
 
-impl AiClient {
-    pub fn from_env() -> Self {
-        let router_url = std::env::var("ROUTER_URL")
-            .unwrap_or_else(|_| "https://ai-router.cutecity.workers.dev".to_string());
-        let router_key = std::env::var("ROUTER_KEY").ok().filter(|k| !k.is_empty());
-        let model =
-            std::env::var("AI_MODEL").unwrap_or_else(|_| "openai/gpt-oss-20b".to_string());
+impl RouterBackend {
+    pub fn new(name: &str, url: String, key: String, model: String) -> Self {
         Self {
-            router_url,
-            router_key,
+            name: name.to_string(),
+            url,
+            key,
             model,
+            timeout_secs: 30,
             http: reqwest::Client::new(),
         }
     }
 
-    pub fn has_key(&self) -> bool {
-        self.router_key.is_some()
-    }
-
-    /// Interpret an utterance. Returns a proposal + reply text.
-    /// On any provider failure: deterministic fixture (governor still runs).
-    pub async fn interpret(&self, utterance: &str, epistemic_hint: &str, persona: &str) -> AiReply {
-        let system_prompt = load_persona(persona);
-        if let Some(key) = &self.router_key {
-            match self.call_router(key, utterance, epistemic_hint, &system_prompt).await {
-                Ok(r) => return r,
-                Err(e) => {
-                    tracing::warn!("ai router failed, fixture fallback: {}", e);
-                }
-            }
-        }
-        self.fixture(persona, utterance)
-    }
-
-    async fn call_router(
+    async fn generate_inner(
         &self,
-        key: &str,
         utterance: &str,
         epistemic_hint: &str,
         system_prompt: &str,
-    ) -> anyhow::Result<AiReply> {
+    ) -> Result<AiReply, GenError> {
         // Persona goes as a real system message; the user message carries
         // only the governor's epistemic hint and the utterance.
         let body = serde_json::json!({
@@ -146,22 +192,182 @@ impl AiClient {
         });
         let resp = self
             .http
-            .post(format!("{}/v1/chat/completions", self.router_url))
-            .bearer_auth(key)
+            .post(format!("{}/v1/chat/completions", self.url))
+            .bearer_auth(&self.key)
             .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(self.timeout_secs))
             .send()
-            .await?;
-        let v: serde_json::Value = resp.json().await?;
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    GenError::new(GenErrorKind::Timeout, format!("{}: {}", self.name, e))
+                } else {
+                    GenError::new(GenErrorKind::Unavailable, format!("{}: {}", self.name, e))
+                }
+            })?;
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            return Err(GenError::new(
+                GenErrorKind::RateLimited,
+                format!("{}: HTTP 429", self.name),
+            ));
+        }
+        if !status.is_success() {
+            return Err(GenError::new(
+                GenErrorKind::HttpStatus(status.as_u16()),
+                format!("{}: HTTP {}", self.name, status),
+            ));
+        }
+        // STRICT CONTRACT: the provider must return the JSON envelope the
+        // system prompt demands. Prose is a contract violation (Malformed),
+        // not a reply — the governor fails over instead of speaking garbage.
+        // (Behavior change 2026-10-08, C2: the old app-convention path spoke
+        // raw prose; the governor path refuses to.)
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?;
         let text = v["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
             .to_string();
-        // Extract JSON from the response (tolerate prose wrapping).
-        let json_str = extract_json(&text).unwrap_or(text.clone());
-        let mut reply: AiReply = serde_json::from_str(&json_str).unwrap_or(AiReply {
+        let json_str = extract_json(&text)
+            .ok_or_else(|| GenError::new(GenErrorKind::Malformed, format!("{}: no JSON envelope", self.name)))?;
+        let mut reply: AiReply = serde_json::from_str(&json_str).map_err(|e| {
+            GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e))
+        })?;
+        if reply.reply.is_empty() {
+            reply.reply = text;
+        }
+        Ok(reply)
+    }
+}
+
+impl Backend for RouterBackend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn probe(&self) -> ProviderOutcome {
+        if self.key.is_empty() || self.url.is_empty() {
+            ProviderOutcome::Err
+        } else {
+            ProviderOutcome::Ok
+        }
+    }
+
+    fn generate<'a>(
+        &'a self,
+        utterance: &'a str,
+        epistemic_hint: &'a str,
+        system_prompt: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<AiReply, GenError>> + Send + 'a>> {
+        Box::pin(self.generate_inner(utterance, epistemic_hint, system_prompt))
+    }
+}
+
+/// The outcome of one governed turn: the reply plus the provider trail.
+/// Receipts live in the governor's hash-chained stream (the permanent
+/// record); this struct is the in-flight summary.
+pub struct GovernedReply {
+    pub reply: AiReply,
+    /// Selected provider name, "fixture", or "refused".
+    pub provider: String,
+    /// (provider, outcome-kind) for every generate() attempt, in order.
+    pub trail: Vec<(String, String)>,
+    pub refused: bool,
+    /// True when the app requested a forbidden provider and the governor
+    /// overrode it.
+    pub overridden: bool,
+    pub from_fixture: bool,
+}
+
+pub struct AiClient {
+    backends: Vec<Arc<dyn Backend>>,
+    policy: ProviderPolicy,
+}
+
+impl AiClient {
+    pub fn from_env() -> Self {
+        let model =
+            std::env::var("AI_MODEL").unwrap_or_else(|_| "openai/gpt-oss-20b".to_string());
+        let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
+        let mut order: Vec<String> = Vec::new();
+        // Provider lanes in governor priority order. Each lane is key-gated:
+        // no key, no lane. ai-router is the primary free lane; openrouter
+        // and nvidia are optional diversity lanes the governor can fail
+        // over to. The GOVERNOR picks among them — this list is the
+        // candidate set, not a decision.
+        let lanes = [
+            (
+                "ai-router",
+                "ROUTER_URL",
+                "https://ai-router.cutecity.workers.dev",
+                "ROUTER_KEY",
+            ),
+            (
+                "openrouter",
+                "OPENROUTER_URL",
+                "https://openrouter.ai/api",
+                "OPENROUTER_KEY",
+            ),
+            (
+                "nvidia",
+                "NVIDIA_URL",
+                "https://integrate.api.nvidia.com",
+                "NVIDIA_KEY",
+            ),
+        ];
+        for (name, url_var, url_default, key_var) in lanes {
+            let key = std::env::var(key_var).unwrap_or_default();
+            if key.is_empty() {
+                continue;
+            }
+            let url = std::env::var(url_var).unwrap_or_else(|_| url_default.to_string());
+            backends.push(Arc::new(RouterBackend::new(name, url, key, model.clone())));
+            order.push(name.to_string());
+        }
+        let forbidden: Vec<String> = std::env::var("INDY_FORBIDDEN_PROVIDERS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let allow_fixture = std::env::var("INDY_ALLOW_FIXTURE")
+            .map(|v| v != "0")
+            .unwrap_or(true);
+        let max_probes = std::env::var("INDY_MAX_PROBES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        let policy = ProviderPolicy {
+            order,
+            forbidden,
+            allow_fixture,
+            max_probes,
+        };
+        Self { backends, policy }
+    }
+
+    /// Test/embedding constructor: explicit backends + policy, no env.
+    pub fn with_backends(backends: Vec<Arc<dyn Backend>>, policy: ProviderPolicy) -> Self {
+        Self { backends, policy }
+    }
+
+    pub fn has_key(&self) -> bool {
+        self.backends
+            .iter()
+            .any(|b| b.name() != "fixture" && b.probe() == ProviderOutcome::Ok)
+    }
+
+    fn backend(&self, name: &str) -> Option<&Arc<dyn Backend>> {
+        self.backends.iter().find(|b| b.name() == name)
+    }
+
+    fn refusal_reply() -> AiReply {
+        AiReply {
             proposal: AiProposal {
-                intent: "converse".into(),
+                intent: "refuse".into(),
                 claim: None,
                 hypothesis: None,
                 requested_action: None,
@@ -171,12 +377,126 @@ impl AiClient {
                 execute: None,
                 claim_status: None,
             },
-            reply: text.clone(),
-        });
-        if reply.reply.is_empty() {
-            reply.reply = text;
+            reply: REFUSAL_TEXT.to_string(),
         }
-        Ok(reply)
+    }
+
+    /// THE real control path. The governor selects the provider; each
+    /// generate() attempt is classified and receipted; on failure the loop
+    /// re-enters the governor with the dead provider excluded. Termination
+    /// is structural: the dead-set only grows, so selection eventually
+    /// yields fixture or refusal.
+    ///
+    /// `requested` is advisory (the app may name a provider). The governor
+    /// may override it (forbidden) or ignore it (unknown) — both recorded.
+    pub async fn interpret_governed(
+        &self,
+        utterance: &str,
+        epistemic_hint: &str,
+        persona: &str,
+        request_id: &str,
+        session_id: &str,
+        governor: &Governor,
+        requested: Option<&str>,
+    ) -> GovernedReply {
+        let system_prompt = load_persona(persona);
+        let mut down: HashSet<String> = HashSet::new();
+        let mut trail: Vec<(String, String)> = Vec::new();
+        let mut overridden = false;
+
+        loop {
+            let probe = |name: &str| -> ProviderOutcome {
+                if down.contains(name) {
+                    return ProviderOutcome::Err;
+                }
+                match self.backend(name) {
+                    Some(b) => b.probe(),
+                    None => ProviderOutcome::Err,
+                }
+            };
+            let decision =
+                governor.select_provider(request_id, session_id, requested, &self.policy, &probe);
+            overridden |= decision.overridden;
+
+            match decision.selected {
+                None => {
+                    // Governor REFUSED. No provider, no fabrication.
+                    return GovernedReply {
+                        reply: Self::refusal_reply(),
+                        provider: "refused".to_string(),
+                        trail,
+                        refused: true,
+                        overridden,
+                        from_fixture: false,
+                    };
+                }
+                Some(name) if name == "fixture" => {
+                    let t0 = now_ms();
+                    let reply = Self::fixture_reply(persona, utterance);
+                    governor.record_provider_result(
+                        request_id,
+                        session_id,
+                        "fixture",
+                        true,
+                        "fixture",
+                        now_ms().saturating_sub(t0),
+                    );
+                    trail.push(("fixture".to_string(), "ok".to_string()));
+                    return GovernedReply {
+                        reply,
+                        provider: "fixture".to_string(),
+                        trail,
+                        refused: false,
+                        overridden,
+                        from_fixture: true,
+                    };
+                }
+                Some(name) => {
+                    let t0 = now_ms();
+                    let result = match self.backend(&name) {
+                        Some(b) => b.generate(utterance, epistemic_hint, &system_prompt).await,
+                        None => Err(GenError::new(
+                            GenErrorKind::Unavailable,
+                            format!("{}: not configured", name),
+                        )),
+                    };
+                    let dur = now_ms().saturating_sub(t0);
+                    match result {
+                        Ok(reply) => {
+                            governor.record_provider_result(
+                                request_id, session_id, &name, true, "ok", dur,
+                            );
+                            trail.push((name.clone(), "ok".to_string()));
+                            return GovernedReply {
+                                reply,
+                                provider: name,
+                                trail,
+                                refused: false,
+                                overridden,
+                                from_fixture: false,
+                            };
+                        }
+                        Err(e) => {
+                            // Classified failure → receipt → dead-set →
+                            // re-enter the governor. The app never picks
+                            // the replacement; the governor does.
+                            let kind = format!("{:?}", e.kind);
+                            tracing::warn!(
+                                "provider {} failed ({}: {}); governor failover",
+                                name,
+                                kind,
+                                e.msg
+                            );
+                            governor.record_provider_result(
+                                request_id, session_id, &name, false, &kind, dur,
+                            );
+                            trail.push((name.clone(), kind));
+                            down.insert(name);
+                        }
+                    }
+                }
+            }
+        }
     }
 
 /// Zack's talking points, dropped on HER OWN schedule — not gated on the
@@ -215,11 +535,11 @@ fn code_snippet(lower: &str) -> &'static str {
     }
 }
 
-    /// Deterministic fixture: proves the governor/UI without a provider.
-    /// Explicitly marked — never presented as model output.
-    /// Deterministic fixture with persona voice. Epistemic content is IDENTICAL
-    /// across personas — only the voice changes. That's the whole point.
-    fn fixture(&self, persona: &str, utterance: &str) -> AiReply {
+/// Deterministic fixture: proves the governor/UI without a provider.
+/// Explicitly marked — never presented as model output.
+/// Deterministic fixture with persona voice. Epistemic content is IDENTICAL
+/// across personas — only the voice changes. That's the whole point.
+fn fixture_reply(persona: &str, utterance: &str) -> AiReply {
         let lower = utterance.to_lowercase();
         // branch: code | claim | hypothesis | confirm_attack | converse
         let branch = if lower.contains("write code")
@@ -241,7 +561,7 @@ fn code_snippet(lower: &str) -> &'static str {
             (_, "code") => (
                 "write_code",
                 None,
-                Self::code_snippet(&lower).to_string(),
+                AiClient::code_snippet(&lower).to_string(),
             ),
             (_, "hypothesis") => (
                 "hypothesize",
@@ -293,7 +613,7 @@ fn code_snippet(lower: &str) -> &'static str {
             ),
         };
         let turn = FIXTURE_TURNS.fetch_add(1, Ordering::Relaxed);
-        let reply = match Self::talking_point(persona, branch, turn) {
+        let reply = match AiClient::talking_point(persona, branch, turn) {
             Some(tp) => format!("{} {}", reply, tp),
             None => reply,
         };
@@ -312,7 +632,7 @@ fn code_snippet(lower: &str) -> &'static str {
             reply: format!("[fixture:{}] {}", persona, reply),
         }
     }
-}
+} // impl AiClient
 
 #[cfg(test)]
 mod persona_tests {
@@ -346,11 +666,6 @@ mod persona_tests {
     }
 }
 
-// anyhow shim without the dependency: reuse a simple error type.
-mod anyhow {
-    pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-}
-
 fn extract_json(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
@@ -358,5 +673,440 @@ fn extract_json(text: &str) -> Option<String> {
         Some(text[start..=end].to_string())
     } else {
         None
+    }
+}
+
+/// C2: automated provider-failover tests through the REAL control path.
+///
+/// interpret_governed() is the production entry point — these tests drive
+/// it with scripted backends (no network, fully deterministic) and assert
+/// the governor's decisions, the classified failure kinds, and the
+/// hash-chained receipts. If the wiring ever bypasses the governor, these
+/// tests fail.
+#[cfg(test)]
+mod failover_tests {
+    use super::*;
+    use indy_reads::governor::{reconstruct_chain, verify_chain_linkage};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    fn test_reply(text: &str) -> AiReply {
+        AiReply {
+            proposal: AiProposal {
+                intent: "converse".into(),
+                claim: None,
+                hypothesis: None,
+                requested_action: None,
+                response_style: Some("conversational".into()),
+                authority: None,
+                verified: None,
+                execute: None,
+                claim_status: None,
+            },
+            reply: text.to_string(),
+        }
+    }
+
+    fn gen_err(kind: GenErrorKind) -> GenError {
+        GenError::new(kind, "scripted")
+    }
+
+    /// Scripted backend: probe outcome is mutable (recovery tests flip it),
+    /// generate() pops scripted outcomes in order.
+    struct ScriptBackend {
+        name: String,
+        probe: Mutex<ProviderOutcome>,
+        script: Mutex<VecDeque<Result<AiReply, GenError>>>,
+    }
+
+    impl ScriptBackend {
+        fn new(
+            name: &str,
+            probe: ProviderOutcome,
+            script: Vec<Result<AiReply, GenError>>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                name: name.to_string(),
+                probe: Mutex::new(probe),
+                script: Mutex::new(script.into()),
+            })
+        }
+
+        fn set_probe(&self, outcome: ProviderOutcome) {
+            *self.probe.lock().unwrap() = outcome;
+        }
+    }
+
+    impl Backend for ScriptBackend {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn probe(&self) -> ProviderOutcome {
+            *self.probe.lock().unwrap()
+        }
+
+        fn generate<'a>(
+            &'a self,
+            _utterance: &'a str,
+            _epistemic_hint: &'a str,
+            _system_prompt: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<AiReply, GenError>> + Send + 'a>> {
+            let next = self
+                .script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(gen_err(GenErrorKind::Unavailable)));
+            Box::pin(async move { next })
+        }
+    }
+
+    fn policy_for(names: &[&str]) -> ProviderPolicy {
+        ProviderPolicy {
+            order: names.iter().map(|s| s.to_string()).collect(),
+            forbidden: vec![],
+            allow_fixture: true,
+            max_probes: 8,
+        }
+    }
+
+    fn client(backends: Vec<Arc<dyn Backend>>, policy: ProviderPolicy) -> AiClient {
+        AiClient::with_backends(backends, policy)
+    }
+
+    async fn turn(
+        client: &AiClient,
+        governor: &Governor,
+        request_id: &str,
+        requested: Option<&str>,
+    ) -> GovernedReply {
+        client
+            .interpret_governed(
+                "hello",
+                "no verified evidence",
+                "indy",
+                request_id,
+                "s-test",
+                governor,
+                requested,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn unavailable_provider_is_skipped_by_probe() {
+        // alpha is down at probe time: the governor skips it without ever
+        // calling generate(), and beta serves the turn.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Err,
+            vec![Ok(test_reply("alpha should never speak"))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r = turn(&c, &g, "r1", None).await;
+        assert_eq!(r.provider, "beta");
+        assert_eq!(r.reply.reply, "beta here");
+        assert!(!r.refused);
+        // alpha's script is untouched: generate() was never called.
+        assert_eq!(alpha.script.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn timeout_triggers_governor_failover_with_receipt() {
+        // alpha probes healthy but times out at generate(): the governor
+        // classifies Timeout, receipts the failure, and fails over to beta.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::Timeout))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r = turn(&c, &g, "r1", None).await;
+        assert_eq!(r.provider, "beta");
+        assert_eq!(
+            r.trail,
+            vec![
+                ("alpha".to_string(), "Timeout".to_string()),
+                ("beta".to_string(), "ok".to_string())
+            ]
+        );
+        // Receipt chain: select → FAILED Timeout → reselect → OK.
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        let ops: Vec<&str> = chain.iter().map(|r| r.operation.as_str()).collect();
+        assert_eq!(
+            ops,
+            vec![
+                "governor.select_provider",
+                "provider.call",
+                "governor.select_provider",
+                "provider.call"
+            ]
+        );
+        assert!(chain[1].decision.contains("FAILED alpha kind=Timeout"));
+        assert!(chain[1].decision.contains("Timeout"));
+        assert!(!chain[1].success);
+        assert!(chain[3].success);
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn malformed_response_triggers_failover() {
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::Malformed))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r = turn(&c, &g, "r1", None).await;
+        assert_eq!(r.provider, "beta");
+        assert_eq!(r.trail[0], ("alpha".to_string(), "Malformed".to_string()));
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(chain[1].decision.contains("kind=Malformed"));
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn rate_limited_triggers_failover() {
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::RateLimited))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r = turn(&c, &g, "r1", None).await;
+        assert_eq!(r.provider, "beta");
+        assert_eq!(r.trail[0], ("alpha".to_string(), "RateLimited".to_string()));
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(chain[1].decision.contains("kind=RateLimited"));
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn multi_provider_cascade_two_failures_then_success() {
+        // alpha times out, beta is rate-limited, gamma answers.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::Timeout))],
+        );
+        let beta = ScriptBackend::new(
+            "beta",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::RateLimited))],
+        );
+        let gamma =
+            ScriptBackend::new("gamma", ProviderOutcome::Ok, vec![Ok(test_reply("gamma here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone(), gamma.clone()],
+            policy_for(&["alpha", "beta", "gamma"]),
+        );
+        let r = turn(&c, &g, "r1", None).await;
+        assert_eq!(r.provider, "gamma");
+        assert_eq!(r.trail.len(), 3);
+        assert_eq!(r.trail[2], ("gamma".to_string(), "ok".to_string()));
+        let chain = reconstruct_chain(&g.recent_receipts(12), "r1");
+        assert_eq!(chain.len(), 6); // 3 selects + 3 provider.call receipts
+        assert!(verify_chain_linkage(&chain).is_ok());
+        // The final select is a FAILOVER naming the whole trail.
+        assert!(chain[4].decision.starts_with("FAILOVER"));
+    }
+
+    #[tokio::test]
+    async fn recovery_provider_comes_back_next_turn() {
+        // alpha down on turn 1 (beta serves), recovers before turn 2:
+        // the governor picks alpha again. No sticky dead-set across turns.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Err,
+            vec![Ok(test_reply("alpha back"))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r1 = turn(&c, &g, "r1", None).await;
+        assert_eq!(r1.provider, "beta");
+        alpha.set_probe(ProviderOutcome::Ok);
+        let r2 = turn(&c, &g, "r2", None).await;
+        assert_eq!(r2.provider, "alpha");
+        assert_eq!(r2.reply.reply, "alpha back");
+    }
+
+    #[tokio::test]
+    async fn deterministic_fixture_fallback_when_all_down() {
+        // Every provider dead, fixture allowed: deterministic fixture,
+        // explicitly marked, same result on repeat.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new("alpha", ProviderOutcome::Err, vec![]);
+        let c = client(vec![alpha.clone()], policy_for(&["alpha"]));
+        let r1 = turn(&c, &g, "r1", None).await;
+        let r2 = turn(&c, &g, "r2", None).await;
+        for r in [&r1, &r2] {
+            assert!(!r.refused);
+            assert_eq!(r.provider, "fixture");
+            assert!(r.from_fixture);
+            assert!(r.reply.reply.starts_with("[fixture:indy]"));
+        }
+        assert_eq!(r1.provider, r2.provider, "fallback must be deterministic");
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(chain.iter().any(|r| r.decision == "FIXTURE"));
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn refusal_when_fixture_forbidden_and_all_down() {
+        // Strict policy: no providers, no fixture → the governor REFUSES.
+        // The reply says so honestly; nothing is fabricated.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new("alpha", ProviderOutcome::Err, vec![]);
+        let policy = ProviderPolicy {
+            allow_fixture: false,
+            ..policy_for(&["alpha"])
+        };
+        let c = client(vec![alpha.clone()], policy);
+        let r = turn(&c, &g, "r1", None).await;
+        assert!(r.refused);
+        assert_eq!(r.provider, "refused");
+        assert_eq!(r.reply.proposal.intent, "refuse");
+        assert!(r.reply.reply.contains("forbids making something up"));
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(chain.iter().any(|r| r.decision == "REFUSE"));
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn forbidden_request_overridden_in_live_path() {
+        // The app asks for gamma; governor policy forbids it. Override is
+        // recorded in the receipt, and gamma never generates.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new("alpha", ProviderOutcome::Ok, vec![Ok(test_reply("alpha here"))]);
+        let gamma = ScriptBackend::new(
+            "gamma",
+            ProviderOutcome::Ok,
+            vec![Ok(test_reply("gamma must never speak"))],
+        );
+        let policy = ProviderPolicy {
+            forbidden: vec!["gamma".to_string()],
+            ..policy_for(&["alpha", "gamma"])
+        };
+        let c = client(vec![alpha.clone(), gamma.clone()], policy);
+        let r = turn(&c, &g, "r1", Some("gamma")).await;
+        assert!(r.overridden, "governor must record the override");
+        assert_eq!(r.provider, "alpha");
+        assert_eq!(gamma.script.lock().unwrap().len(), 1, "gamma never called");
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(chain[0].decision.contains("OVERRIDE"));
+    }
+
+    #[tokio::test]
+    async fn backend_outside_policy_order_is_never_selected() {
+        // "rogue" exists and probes healthy but is not in the governor's
+        // order: it can never serve a turn, even when requested by name.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new("alpha", ProviderOutcome::Ok, vec![Ok(test_reply("alpha here"))]);
+        let rogue = ScriptBackend::new(
+            "rogue",
+            ProviderOutcome::Ok,
+            vec![Ok(test_reply("rogue must never speak"))],
+        );
+        let c = client(vec![alpha.clone(), rogue.clone()], policy_for(&["alpha"]));
+        let r = turn(&c, &g, "r1", Some("rogue")).await;
+        assert_eq!(r.provider, "alpha");
+        assert!(!r.overridden, "unknown != forbidden: ignored, not overridden");
+        assert_eq!(rogue.script.lock().unwrap().len(), 1, "rogue never called");
+        let chain = reconstruct_chain(&g.recent_receipts(8), "r1");
+        assert!(!chain[0]
+            .decision
+            .contains("rogue"), "rogue must not appear in the selection receipt");
+    }
+
+    #[tokio::test]
+    async fn full_turn_chain_reconstructs_end_to_end() {
+        // C5 at the AI layer: one turn with a failover produces the full
+        // request → decision → provider → result → (re)decision → provider →
+        // result chain, hash-verified.
+        let g = Governor::new();
+        let alpha = ScriptBackend::new(
+            "alpha",
+            ProviderOutcome::Ok,
+            vec![Err(gen_err(GenErrorKind::HttpStatus(500)))],
+        );
+        let beta = ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+        let c = client(
+            vec![alpha.clone(), beta.clone()],
+            policy_for(&["alpha", "beta"]),
+        );
+        let r = turn(&c, &g, "r-chain-1", None).await;
+        assert_eq!(r.provider, "beta");
+
+        let chain = reconstruct_chain(&g.recent_receipts(16), "r-chain-1");
+        assert_eq!(chain.len(), 4);
+        let ops: Vec<&str> = chain.iter().map(|r| r.operation.as_str()).collect();
+        assert_eq!(
+            ops,
+            vec![
+                "governor.select_provider",
+                "provider.call",
+                "governor.select_provider",
+                "provider.call"
+            ]
+        );
+        // Every receipt carries the same request and session.
+        assert!(chain.iter().all(|r| r.request_id == "r-chain-1"));
+        assert!(chain.iter().all(|r| r.session_id == "s-test"));
+        // The failure is classified in the permanent record.
+        assert!(chain[1].decision.contains("FAILED alpha kind=HttpStatus(500)"));
+        assert!(!chain[1].success);
+        assert!(chain[3].decision.contains("OK beta"));
+        assert!(chain[3].success);
+        // Hash linkage verifies end to end.
+        assert!(verify_chain_linkage(&chain).is_ok());
+    }
+
+    #[tokio::test]
+    async fn failover_is_deterministic_same_inputs_same_decision() {
+        // Same provider health twice → same selection, same trail.
+        let g = Governor::new();
+        let mk = || {
+            let alpha = ScriptBackend::new(
+                "alpha",
+                ProviderOutcome::Ok,
+                vec![Err(gen_err(GenErrorKind::Timeout))],
+            );
+            let beta =
+                ScriptBackend::new("beta", ProviderOutcome::Ok, vec![Ok(test_reply("beta here"))]);
+            client(
+                vec![alpha.clone(), beta.clone()],
+                policy_for(&["alpha", "beta"]),
+            )
+        };
+        let r1 = turn(&mk(), &g, "r1", None).await;
+        let r2 = turn(&mk(), &g, "r2", None).await;
+        assert_eq!(r1.provider, r2.provider);
+        assert_eq!(r1.trail, r2.trail);
     }
 }

@@ -143,6 +143,11 @@ struct TurnResponse {
     decision: GovernorDecisionLite,
     latency_ms: u64,
     fixture: bool,
+    /// Governor-selected provider for this turn ("fixture" | "refused" |
+    /// provider name). The governor — not app convention — picked it.
+    provider: String,
+    /// (provider, outcome-kind) for every generate() attempt, in order.
+    provider_trail: Vec<String>,
     persona: String,
     avatar: AvatarView,
     voice: VoiceState,
@@ -563,11 +568,27 @@ async fn turn(
 
     // GOVERNOR FIRST: classify + decide before the AI speaks.
     // The AI gets a proposal slot, not authority.
+    //
+    // PROVIDER CONTROL PATH (C4): interpret_governed runs the governor's
+    // provider selection (forbidden-override, priority, failover, fixture,
+    // refusal) with every attempt classified and receipted. The app no
+    // longer picks providers by convention — the governor does.
     let ai = AiClient::from_env();
-    let fixture_mode = !ai.has_key();
     let hint = "no verified evidence";
     let persona = req.persona.clone().unwrap_or_else(|| "indy".to_string());
-    let ai_reply = ai.interpret(&utterance, hint, &persona).await;
+    let governed = ai
+        .interpret_governed(
+            &utterance,
+            hint,
+            &persona,
+            &request_id,
+            &session_id,
+            &state.governor,
+            None,
+        )
+        .await;
+    let ai_reply = governed.reply;
+    let fixture_mode = governed.from_fixture;
 
     let intent = classify_intent(&utterance);
     let _t_ai_done = now_ms();
@@ -579,6 +600,19 @@ async fn turn(
         &evidence,
     );
     let t_gov_done = now_ms();
+
+    // State transition receipt (C5): the turn's move through the governor
+    // is part of the hash chain — request → decision → provider → result →
+    // state → receipt, reconstructable from /api/receipts.
+    state.governor.record_state_transition(
+        &request_id,
+        &session_id,
+        "turn.complete",
+        &format!(
+            "mode={} provider={} refused={} overridden={}",
+            decision.response_mode, governed.provider, governed.refused, governed.overridden
+        ),
+    );
 
     // Validate: the reply must respect the epistemic status.
     // Fixture replies are deterministic, version-controlled code — trusted by
@@ -647,7 +681,7 @@ async fn turn(
             &user_seg.speaker_id, user_seg.started_at_ms, user_seg.ended_at_ms,
             &user_seg.text, &intent_s, Some(&epistemic),
             Some(&decision.claim_id), Some(&decision.receipt.receipt_id),
-            t_gov_done.saturating_sub(t0), if fixture_mode { "fixture" } else { "router" },
+            t_gov_done.saturating_sub(t0), &governed.provider,
         );
         let indy_seg = state.diarizer.diarize_turn(
             speakers::INDY_ID, speakers::INDY_LABEL, &reply, t_gov_done, latency_ms.saturating_add(t0));
@@ -656,7 +690,7 @@ async fn turn(
             &indy_seg.speaker_id, indy_seg.started_at_ms, indy_seg.ended_at_ms,
             &indy_seg.text, "Respond", Some(&epistemic),
             Some(&decision.claim_id), Some(&decision.receipt.receipt_id),
-            latency_ms, if fixture_mode { "fixture" } else { "router" },
+            latency_ms, &governed.provider,
         );
         let _ = store.upsert_claim(
             &decision.claim_id, &session_id, &decision.claim_text,
@@ -896,6 +930,12 @@ async fn turn(
         },
         latency_ms,
         fixture: fixture_mode,
+        provider: governed.provider.clone(),
+        provider_trail: governed
+            .trail
+            .iter()
+            .map(|(p, o)| format!("{}:{}", p, o))
+            .collect(),
         persona: persona.clone(),
         avatar: avatar_view,
         voice: voice_state,

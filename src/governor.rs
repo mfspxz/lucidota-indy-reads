@@ -463,6 +463,22 @@ pub struct ProviderPolicy {
     pub forbidden: Vec<String>,
     /// Total provider failure → deterministic fixture (true) or REFUSE (false).
     pub allow_fixture: bool,
+    /// RESOURCE POLICY, governor-enforced: maximum providers probed per
+    /// selection decision. Bounds the governor's own work so a huge order
+    /// can't turn one decision into an unbounded probe sweep. The app
+    /// cannot raise this; it lives in policy, not in the call path.
+    pub max_probes: usize,
+}
+
+impl Default for ProviderPolicy {
+    fn default() -> Self {
+        Self {
+            order: Vec::new(),
+            forbidden: Vec::new(),
+            allow_fixture: true,
+            max_probes: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -521,7 +537,10 @@ impl Governor {
         }
 
         let mut selected: Option<String> = None;
-        for p in &order {
+        // Governor-enforced resource bound: never probe more than
+        // max_probes providers per decision, no matter how long the order.
+        let bound_hit = order.len() > policy.max_probes;
+        for p in order.iter().take(policy.max_probes) {
             let out = probe(p);
             attempted.push((p.clone(), out));
             if out == ProviderOutcome::Ok {
@@ -530,6 +549,11 @@ impl Governor {
             }
         }
 
+        let bound_note = if bound_hit && selected.is_none() {
+            format!("resource bound max_probes={} reached; ", policy.max_probes)
+        } else {
+            String::new()
+        };
         let (decision, refused, reason) = match (&selected, policy.allow_fixture) {
             (Some(p), _) if attempted.len() > 1 => (
                 format!("FAILOVER {}", attempted.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join("->")),
@@ -544,12 +568,12 @@ impl Governor {
             (None, true) => (
                 "FIXTURE".to_string(),
                 false,
-                "all providers down; deterministic fixture per policy".to_string(),
+                format!("{}all providers down; deterministic fixture per policy", bound_note),
             ),
             (None, false) => (
                 "REFUSE".to_string(),
                 true,
-                "all providers down and fixture forbidden by policy; refusing rather than fabricating".to_string(),
+                format!("{}all providers down and fixture forbidden by policy; refusing rather than fabricating", bound_note),
             ),
         };
         if selected.is_none() && policy.allow_fixture {
@@ -589,6 +613,89 @@ impl Governor {
             receipt,
         }
     }
+
+    /// Record a provider generation result in the hash chain. Called by the
+    /// AI layer after every generate() attempt — success or classified
+    /// failure. This is what makes request → decision → provider → result
+    /// reconstructable: the receipt stream, not a log line, is the record.
+    pub fn record_provider_result(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        provider: &str,
+        success: bool,
+        outcome: &str,
+        duration_ms: u64,
+    ) -> Receipt {
+        let t0 = now_ms();
+        self.commit_receipt(
+            ReceiptBuilder::new(request_id, session_id, "governor", "provider.call")
+                .input(&format!("provider={}", provider))
+                .decision(if success {
+                    format!("OK {}", provider)
+                } else {
+                    format!("FAILED {} kind={}", provider, outcome)
+                })
+                .output(&format!("{}:{}", provider, outcome))
+                .duration_ms(duration_ms.max(now_ms().saturating_sub(t0)))
+                .success(success)
+                .build(),
+        )
+    }
+
+    /// Record a state transition in the hash chain (e.g. turn.complete).
+    /// State moves are governor territory: the receipt names the transition
+    /// and the evidence that justified it.
+    pub fn record_state_transition(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        transition: &str,
+        detail: &str,
+    ) -> Receipt {
+        self.commit_receipt(
+            ReceiptBuilder::new(request_id, session_id, "governor", "turn.state")
+                .input(detail)
+                .decision(transition.to_string())
+                .duration_ms(0)
+                .success(true)
+                .build(),
+        )
+    }
+}
+
+/// Reconstruct the receipt chain for one request: filter the governor's
+/// receipt stream by request_id, oldest first. The chain is
+/// request → decision → provider → result → state → receipt, and this is
+/// the function a reviewer calls to walk it.
+pub fn reconstruct_chain(all: &[Receipt], request_id: &str) -> Vec<Receipt> {
+    let mut chain: Vec<Receipt> = all
+        .iter()
+        .filter(|r| r.request_id == request_id)
+        .cloned()
+        .collect();
+    chain.reverse(); // recent_receipts is newest-first; the chain reads oldest-first
+    chain
+}
+
+/// Verify the hash linkage of a reconstructed chain: every receipt's
+/// prev_hash must equal the chain hash of its predecessor. Returns the
+/// offending receipt id on the first broken link.
+pub fn verify_chain_linkage(chain: &[Receipt]) -> Result<(), String> {
+    for pair in chain.windows(2) {
+        let (prev, cur) = (&pair[0], &pair[1]);
+        let expect = hash_str(&format!(
+            "{}{}{}{}",
+            prev.prev_hash, prev.receipt_id, prev.operation, prev.decision
+        ));
+        if cur.prev_hash != expect {
+            return Err(format!(
+                "broken link: {} -> {} (expected prev_hash {})",
+                prev.receipt_id, cur.receipt_id, expect
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -847,6 +954,7 @@ mod tests {
             order: vec!["alpha".to_string(), "beta".to_string()],
             forbidden: vec!["gamma".to_string()],
             allow_fixture: true,
+            max_probes: 8,
         }
     }
 
@@ -958,5 +1066,107 @@ mod tests {
         assert_eq!(d2.receipt.prev_hash.len(), 64);
         let recent = g.recent_receipts(2);
         assert!(recent.iter().all(|r| r.operation == "governor.select_provider"));
+    }
+
+    // ---- C4 extension: resource policy + authorization + chain reconstruction ----
+
+    #[test]
+    fn max_probes_caps_governor_probe_work() {
+        // Resource policy is governor-enforced: with 5 dead providers and
+        // max_probes=2, the governor probes exactly 2, then falls back to
+        // the fixture per policy — it does not sweep the whole order.
+        let g = Governor::new();
+        let policy = ProviderPolicy {
+            order: vec!["a", "b", "c", "d", "e"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            allow_fixture: true,
+            max_probes: 2,
+            ..policy()
+        };
+        let d = g.select_provider("r1", "s1", None, &policy, &|_| ProviderOutcome::Err);
+        assert_eq!(d.attempted.len(), 2, "governor must stop probing at max_probes");
+        assert_eq!(d.selected.as_deref(), Some("fixture"));
+        assert_eq!(d.receipt.decision, "FIXTURE");
+        assert!(d.reason.contains("max_probes=2"), "bound must be in the record: {}", d.reason);
+        assert!(!d.refused);
+    }
+
+    #[test]
+    fn max_probes_bound_refuses_when_fixture_forbidden() {
+        // Same bound, strict policy: the bound is recorded AND the governor
+        // still refuses rather than fabricating.
+        let g = Governor::new();
+        let policy = ProviderPolicy {
+            order: vec!["a", "b", "c"].into_iter().map(String::from).collect(),
+            allow_fixture: false,
+            max_probes: 1,
+            ..policy()
+        };
+        let d = g.select_provider("r1", "s1", None, &policy, &|_| ProviderOutcome::Err);
+        assert_eq!(d.attempted.len(), 1);
+        assert!(d.refused);
+        assert_eq!(d.receipt.decision, "REFUSE");
+        assert!(d.reason.contains("max_probes=1"));
+        assert!(d.reason.contains("refusing rather than fabricating"));
+    }
+
+    #[test]
+    fn unknown_requested_provider_is_never_probed() {
+        // Authorization: a requested provider outside the governor's order
+        // is ignored — never probed, never selected, never in the trail.
+        let g = Governor::new();
+        let probed = std::cell::RefCell::new(Vec::<String>::new());
+        let d = g.select_provider("r1", "s1", Some("zeus"), &policy(), &|p| {
+            probed.borrow_mut().push(p.to_string());
+            ProviderOutcome::Ok
+        });
+        let probed = probed.into_inner();
+        assert!(!d.overridden, "unknown != forbidden: no override recorded");
+        assert!(!probed.contains(&"zeus".to_string()), "zeus must never be probed");
+        assert!(!d.attempted.iter().any(|(n, _)| n == "zeus"));
+        assert_ne!(d.selected.as_deref(), Some("zeus"));
+    }
+
+    #[test]
+    fn reconstruct_chain_walks_request_to_receipt() {
+        // C5: request → decision → provider → result → state, reconstructed
+        // from the receipt stream and hash-verified.
+        let g = Governor::new();
+        let d = g.decide("r-chain", "s1", "the lake monster exists", proposal(), &[]);
+        let _sel = g.select_provider("r-chain", "s1", None, &policy(), &|_| ProviderOutcome::Ok);
+        let _res = g.record_provider_result("r-chain", "s1", "alpha", true, "ok", 12);
+        let _st = g.record_state_transition("r-chain", "s1", "turn.complete", "mode=DIRECT provider=alpha");
+        // Noise from another request must not leak into the chain.
+        let _noise = g.decide("r-other", "s1", "unrelated", proposal(), &[]);
+
+        let all = g.recent_receipts(16);
+        let chain = reconstruct_chain(&all, "r-chain");
+        let ops: Vec<&str> = chain.iter().map(|r| r.operation.as_str()).collect();
+        assert_eq!(
+            ops,
+            vec!["governor.decide", "governor.select_provider", "provider.call", "turn.state"],
+            "chain must read request→decision→provider→result→state, got {:?}",
+            ops
+        );
+        assert!(chain.iter().all(|r| r.request_id == "r-chain"));
+        assert!(verify_chain_linkage(&chain).is_ok(), "chain linkage must verify");
+        let _ = d;
+    }
+
+    #[test]
+    fn verify_chain_linkage_detects_tampering() {
+        // A hostile reviewer reorders two receipts: verification must fail
+        // at the broken link, naming it.
+        let g = Governor::new();
+        g.decide("r-t", "s1", "x", proposal(), &[]);
+        let _ = g.record_provider_result("r-t", "s1", "alpha", true, "ok", 1);
+        let all = g.recent_receipts(8);
+        let mut chain = reconstruct_chain(&all, "r-t");
+        assert!(verify_chain_linkage(&chain).is_ok());
+        chain.swap(0, 1);
+        let err = verify_chain_linkage(&chain).expect_err("reordered chain must fail");
+        assert!(err.contains("broken link"), "got: {}", err);
     }
 }
