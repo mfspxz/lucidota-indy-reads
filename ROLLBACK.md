@@ -37,7 +37,7 @@ makes rollback possible.
 
 ```bash
 ./release                    # build a bundle (runs ./verify first)
-./rollback-test release/indy-reads-<version>-<sha>
+./rollback-test releases/indy-reads-<version>-<sha>
 ```
 
 The drill deploys the good release, simulates a partial deploy (bundle

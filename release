@@ -38,7 +38,7 @@ INDY_VERIFY_OUT="/tmp/indy-release-verify.json" \
 [ "$(python3 -c 'import json; print(json.load(open("/tmp/indy-release-verify.json"))["verdict"])')" = "VERIFIED" ] \
   || { echo "RELEASE: REFUSED — ./verify not green"; exit 1; }
 
-DIR="release/indy-reads-${VERSION}-${SHORT_SHA}"
+DIR="releases/indy-reads-${VERSION}-${SHORT_SHA}"
 rm -rf "$DIR"
 mkdir -p "$DIR/bin"
 cp target/release/indy-reads target/release/indy-verify "$DIR/bin/"
