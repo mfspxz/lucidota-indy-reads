@@ -8,9 +8,24 @@
 //! PUBLIC API, exactly what a hostile or sloppy app-layer caller can reach.
 
 use indy_reads::governor::{
-    reconstruct_chain, verify_chain_linkage, Governor, ProviderOutcome, ProviderPolicy,
+    reconstruct_chain, verify_chain_linkage, AiProposal, Governor, ProviderOutcome,
+    ProviderPolicy,
 };
 use indy_reads::receipts::Receipt;
+
+fn proposal() -> AiProposal {
+    AiProposal {
+        intent: "assess_claim".into(),
+        claim: Some("lake monster exists".into()),
+        hypothesis: None,
+        requested_action: Some("assess".into()),
+        response_style: Some("conversational".into()),
+        authority: None,
+        verified: None,
+        execute: None,
+        claim_status: None,
+    }
+}
 
 fn policy(order: &[&str], max_probes: usize, allow_fixture: bool) -> ProviderPolicy {
     ProviderPolicy {
@@ -109,19 +124,48 @@ fn over_budget_probe_sweep_is_bounded_by_governor() {
 // ── ATTACK 3: unauthorized state transition ────────────────────────────
 // The app records a transition the governor never authorized.
 #[test]
-fn unauthorized_state_transition_is_recorded_without_authorization() {
+fn unauthorized_state_transition_is_blocked_with_veto_receipt() {
     let g = Governor::new();
-    // FINDING (filed in the wave-14 receipt): record_state_transition
-    // performs NO authorization. Any caller can record any transition
-    // string — "turn.approve_all" lands in the hash chain as if the
-    // governor ordered it. The chain records; it does not gate.
+    // wave-16 fix: record_state_transition now enforces authorization.
+    // Case A: invented transition vocabulary — rejected even with a
+    // governor decision behind the request.
+    let _d = g.decide("r-trans", "s", "hello", proposal(), &[]);
     let r = g.record_state_transition("r-trans", "s", "turn.approve_all", "app said so");
-    assert_eq!(r.decision, "turn.approve_all");
-    assert!(r.success);
-    let chain = reconstruct_chain(&g.recent_receipts(4), "r-trans");
-    assert_eq!(chain.len(), 1);
-    assert_eq!(chain[0].operation, "turn.state");
-    // The test documents the gap: this PASSES today, which is the problem.
+    assert!(!r.success, "forged transition must be BLOCKED");
+    assert!(
+        r.decision.contains("VETO"),
+        "rejection must carry a veto receipt, got: {}",
+        r.decision
+    );
+    assert_eq!(r.operation, "turn.state");
+    // Case B: legitimate vocabulary but no governor decision for the
+    // request — also rejected.
+    let r2 = g.record_state_transition("r-never-decided", "s", "turn.complete", "app said so");
+    assert!(!r2.success, "transition without a governor decision must be BLOCKED");
+    assert!(r2.decision.contains("VETO"));
+    // The veto receipts are in the chain (attempt = evidence); the forged
+    // transition itself is NOT recorded as ordered.
+    let chain = reconstruct_chain(&g.recent_receipts(8), "r-trans");
+    assert!(
+        chain.iter().all(|r| r.decision != "turn.approve_all"),
+        "forged transition must never land as governor-ordered"
+    );
+}
+
+// ── ATTACK 3b: replayed transition ─────────────────────────────────────
+// One decision authorizes exactly one transition record.
+#[test]
+fn replayed_state_transition_is_blocked() {
+    let g = Governor::new();
+    let _d = g.decide("r-replay", "s", "hello", proposal(), &[]);
+    let ok = g.record_state_transition("r-replay", "s", "turn.complete", "first");
+    assert!(ok.success, "first authorized transition must record");
+    let again = g.record_state_transition("r-replay", "s", "turn.complete", "second");
+    assert!(
+        !again.success,
+        "replayed transition must be BLOCKED after the authorization is consumed"
+    );
+    assert!(again.decision.contains("VETO"));
 }
 
 // ── ATTACK 4: suppressed refusal ───────────────────────────────────────

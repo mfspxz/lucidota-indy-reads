@@ -18,6 +18,7 @@ use crate::store::Store;
 use crate::voice::{clone_engine_from_env, CloneEngine};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -83,7 +84,20 @@ pub struct GovernorDecision {
 pub struct Governor {
     receipts: Arc<Mutex<Vec<Receipt>>>,
     last_hash: Arc<Mutex<String>>,
+    /// Transition authorization: (request_id, session_id) pairs for which
+    /// decide() has run. record_state_transition() only records a transition
+    /// when this set holds the request — state moves are governor territory,
+    /// and the authorization is issued by the governor itself at decision
+    /// time, never by the caller.
+    transition_auth: Arc<Mutex<HashSet<(String, String)>>>,
 }
+
+/// The transition vocabulary the governor will ever issue. This is a
+/// closed, code-defined set — not runtime data — so a compromised caller
+/// cannot invent new transitions ("turn.approve_all") and have them land
+/// in the hash chain as governor-ordered. Extending the vocabulary is a
+/// deliberate code change, reviewed like any authority expansion.
+const GOVERNOR_TRANSITIONS: &[&str] = &["turn.complete"];
 
 /// Normalize text before security-phrase matching: lowercase, strip
 /// invisible format characters (zero-width spaces etc.), and map common
@@ -231,6 +245,7 @@ impl Governor {
         Self {
             receipts: Arc::new(Mutex::new(Vec::new())),
             last_hash: Arc::new(Mutex::new("genesis".to_string())),
+            transition_auth: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -359,6 +374,14 @@ impl Governor {
                 .success(true)
                 .build(),
         );
+
+        // Issue the transition authorization: this request has a governor
+        // decision behind it, so exactly one state transition may now be
+        // recorded for it. record_state_transition() consumes it.
+        self.transition_auth
+            .lock()
+            .unwrap()
+            .insert((request_id.to_string(), session_id.to_string()));
 
         GovernorDecision {
             decision_id: Uuid::new_v4().to_string(),
@@ -749,8 +772,18 @@ impl Governor {
     }
 
     /// Record a state transition in the hash chain (e.g. turn.complete).
-    /// State moves are governor territory: the receipt names the transition
-    /// and the evidence that justified it.
+    /// State moves are governor territory — enforced, not documented:
+    ///
+    /// 1. The transition must be in the governor's closed vocabulary
+    ///    (GOVERNOR_TRANSITIONS); anything else is rejected.
+    /// 2. The governor must have issued a decision for this
+    ///    (request_id, session_id) — the authorization is stamped by
+    ///    decide() and consumed here, so one decision authorizes exactly
+    ///    one transition record (no replay, no forging).
+    ///
+    /// Rejections are BLOCKED with a veto receipt (success=false) that
+    /// still lands in the hash chain — the attempt is evidence, the
+    /// transition is not recorded.
     pub fn record_state_transition(
         &self,
         request_id: &str,
@@ -758,6 +791,31 @@ impl Governor {
         transition: &str,
         detail: &str,
     ) -> Receipt {
+        if !GOVERNOR_TRANSITIONS.contains(&transition) {
+            return self.commit_receipt(
+                ReceiptBuilder::new(request_id, session_id, "governor", "turn.state")
+                    .input(detail)
+                    .decision(format!("VETO unauthorized transition {:?}", transition))
+                    .duration_ms(0)
+                    .success(false)
+                    .build(),
+            );
+        }
+        let authorized = self
+            .transition_auth
+            .lock()
+            .unwrap()
+            .remove(&(request_id.to_string(), session_id.to_string()));
+        if !authorized {
+            return self.commit_receipt(
+                ReceiptBuilder::new(request_id, session_id, "governor", "turn.state")
+                    .input(detail)
+                    .decision("VETO no governor decision for this request".to_string())
+                    .duration_ms(0)
+                    .success(false)
+                    .build(),
+            );
+        }
         self.commit_receipt(
             ReceiptBuilder::new(request_id, session_id, "governor", "turn.state")
                 .input(detail)
