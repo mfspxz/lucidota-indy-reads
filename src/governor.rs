@@ -443,6 +443,154 @@ impl AppState {
     }
 }
 
+/// Provider policy: the GOVERNOR — not application convention — decides which
+/// provider serves a turn, when to fail over, and when to refuse.
+///
+/// The app layer may *request* a provider (advisory only). The governor:
+///   1. rejects forbidden providers even if requested (override, recorded);
+///   2. walks its priority order, probing each provider deterministically;
+///   3. fails over to the next healthy provider on failure;
+///   4. falls back to the deterministic fixture only if policy allows it;
+///   5. otherwise REFUSES — it never fabricates a provider result.
+///
+/// Every step is recorded in a hash-chained receipt, so the decision is
+/// reconstructable: who was asked, who answered, who was skipped, and why.
+#[derive(Debug, Clone)]
+pub struct ProviderPolicy {
+    /// Priority order. First healthy, allowed provider wins.
+    pub order: Vec<String>,
+    /// Governor-forbidden providers. A request for one is overridden.
+    pub forbidden: Vec<String>,
+    /// Total provider failure → deterministic fixture (true) or REFUSE (false).
+    pub allow_fixture: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderOutcome {
+    Ok,
+    Err,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderDecision {
+    /// Chosen provider, "fixture", or None when refused.
+    pub selected: Option<String>,
+    /// Every provider probed, in order, with its outcome.
+    pub attempted: Vec<(String, ProviderOutcome)>,
+    /// True when the app's requested provider was overridden by the governor.
+    pub overridden: bool,
+    /// True only when the governor refused to serve the turn.
+    pub refused: bool,
+    pub reason: String,
+    pub receipt: Receipt,
+}
+
+impl Governor {
+    /// Deterministic provider selection under governor authority.
+    /// `probe` is the transport boundary (injected so tests exercise the
+    /// real decision path without network).
+    pub fn select_provider(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        requested: Option<&str>,
+        policy: &ProviderPolicy,
+        probe: &dyn Fn(&str) -> ProviderOutcome,
+    ) -> ProviderDecision {
+        let t0 = now_ms();
+        let mut attempted: Vec<(String, ProviderOutcome)> = Vec::new();
+        let mut overridden = false;
+
+        // Allowed providers in governor priority order.
+        let mut order: Vec<String> = policy
+            .order
+            .iter()
+            .filter(|p| !policy.forbidden.contains(p))
+            .cloned()
+            .collect();
+
+        // The app's preference is advisory. Forbidden => overridden and
+        // recorded; unknown => ignored; allowed => jumps the queue.
+        if let Some(r) = requested {
+            if policy.forbidden.contains(&r.to_string()) {
+                overridden = true;
+            } else if policy.order.contains(&r.to_string()) {
+                order.retain(|p| p != r);
+                order.insert(0, r.to_string());
+            }
+        }
+
+        let mut selected: Option<String> = None;
+        for p in &order {
+            let out = probe(p);
+            attempted.push((p.clone(), out));
+            if out == ProviderOutcome::Ok {
+                selected = Some(p.clone());
+                break;
+            }
+        }
+
+        let (decision, refused, reason) = match (&selected, policy.allow_fixture) {
+            (Some(p), _) if attempted.len() > 1 => (
+                format!("FAILOVER {}", attempted.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join("->")),
+                false,
+                format!("provider {} selected after {} failure(s)", p, attempted.len() - 1),
+            ),
+            (Some(p), _) => (
+                format!("SELECT {}", p),
+                false,
+                format!("provider {} healthy", p),
+            ),
+            (None, true) => (
+                "FIXTURE".to_string(),
+                false,
+                "all providers down; deterministic fixture per policy".to_string(),
+            ),
+            (None, false) => (
+                "REFUSE".to_string(),
+                true,
+                "all providers down and fixture forbidden by policy; refusing rather than fabricating".to_string(),
+            ),
+        };
+        if selected.is_none() && policy.allow_fixture {
+            selected = Some("fixture".to_string());
+        }
+        if overridden {
+            // The override is part of the permanent record, not a log line.
+        }
+
+        let receipt = self.commit_receipt(
+            ReceiptBuilder::new(request_id, session_id, "governor", "governor.select_provider")
+                .input(&format!(
+                    "requested={:?} overridden={} attempted={:?}",
+                    requested, overridden, attempted
+                ))
+                .decision(format!(
+                    "{}{}",
+                    decision,
+                    if overridden {
+                        format!(" OVERRIDE requested={:?} forbidden", requested)
+                    } else {
+                        String::new()
+                    }
+                ))
+                .epistemic("UNKNOWN")
+                .duration_ms(now_ms().saturating_sub(t0))
+                .success(true)
+                .build(),
+        );
+
+        ProviderDecision {
+            selected,
+            attempted,
+            overridden,
+            refused,
+            reason,
+            receipt,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,5 +835,128 @@ mod tests {
         let recent = g.recent_receipts(2);
         assert_eq!(recent[0].operation, "claim.revise");
         assert!(recent[0].revision.is_some());
+    }
+
+    // ---- C4: governor-controlled provider selection (behavioral) ----
+    // These tests prove the GOVERNOR — not application convention — controls
+    // provider selection, failover, and refusal. The transport is injected
+    // (`probe`), so the real decision path is exercised with no network.
+
+    fn policy() -> ProviderPolicy {
+        ProviderPolicy {
+            order: vec!["alpha".to_string(), "beta".to_string()],
+            forbidden: vec!["gamma".to_string()],
+            allow_fixture: true,
+        }
+    }
+
+    #[test]
+    fn governor_overrides_forbidden_provider_request() {
+        // App convention asks for gamma; governor policy forbids it.
+        // Both providers are healthy — the governor must still refuse gamma.
+        let g = Governor::new();
+        let d = g.select_provider("r1", "s1", Some("gamma"), &policy(), &|_| ProviderOutcome::Ok);
+        assert!(d.overridden, "governor must record the override");
+        assert_eq!(d.selected.as_deref(), Some("alpha")); // priority order kept
+        assert!(!d.refused);
+        assert!(
+            d.receipt.decision.contains("OVERRIDE"),
+            "override must be in the permanent receipt, not a log line: {}",
+            d.receipt.decision
+        );
+        assert_eq!(d.receipt.operation, "governor.select_provider");
+    }
+
+    #[test]
+    fn governor_fails_over_deterministically() {
+        // alpha dies, beta lives: the governor — not the app — picks beta,
+        // and the same inputs always produce the same decision.
+        let g = Governor::new();
+        let probe = |p: &str| {
+            if p == "alpha" {
+                ProviderOutcome::Err
+            } else {
+                ProviderOutcome::Ok
+            }
+        };
+        let d1 = g.select_provider("r1", "s1", None, &policy(), &probe);
+        let d2 = g.select_provider("r2", "s1", None, &policy(), &probe);
+        for d in [&d1, &d2] {
+            assert_eq!(d.selected.as_deref(), Some("beta"));
+            assert_eq!(
+                d.attempted,
+                vec![
+                    ("alpha".to_string(), ProviderOutcome::Err),
+                    ("beta".to_string(), ProviderOutcome::Ok)
+                ]
+            );
+            assert!(d.receipt.decision.starts_with("FAILOVER"));
+            assert!(!d.refused);
+        }
+        assert_eq!(d1.selected, d2.selected, "failover must be deterministic");
+    }
+
+    #[test]
+    fn governor_refuses_rather_than_fabricates() {
+        // Every provider down, fixture forbidden: the governor REFUSES.
+        // This is the anti-hallucination guarantee — no provider, no answer.
+        let g = Governor::new();
+        let strict = ProviderPolicy {
+            allow_fixture: false,
+            ..policy()
+        };
+        let d = g.select_provider("r1", "s1", None, &strict, &|_| ProviderOutcome::Err);
+        assert!(d.refused);
+        assert_eq!(d.selected, None);
+        assert_eq!(d.receipt.decision, "REFUSE");
+        assert!(d.reason.contains("refusing rather than fabricating"));
+    }
+
+    #[test]
+    fn governor_uses_fixture_only_when_policy_allows() {
+        let g = Governor::new();
+        let d = g.select_provider("r1", "s1", None, &policy(), &|_| ProviderOutcome::Err);
+        assert!(!d.refused);
+        assert_eq!(d.selected.as_deref(), Some("fixture"));
+        assert_eq!(d.receipt.decision, "FIXTURE");
+    }
+
+    #[test]
+    fn app_cannot_invent_or_force_providers() {
+        // App requests a provider that isn't in the governor's order at all:
+        // ignored. App requests an allowed provider: it jumps the queue, but
+        // the governor still probes it — a dead requested provider fails over.
+        let g = Governor::new();
+        let d = g.select_provider("r1", "s1", Some("zeus"), &policy(), &|_| ProviderOutcome::Ok);
+        assert!(!d.overridden);
+        assert_eq!(d.selected.as_deref(), Some("alpha"));
+        assert!(d.receipt.decision.starts_with("SELECT"));
+
+        let d2 = g.select_provider(
+            "r2",
+            "s1",
+            Some("beta"),
+            &policy(),
+            &|p| {
+                if p == "beta" {
+                    ProviderOutcome::Err
+                } else {
+                    ProviderOutcome::Ok
+                }
+            },
+        );
+        assert_eq!(d2.selected.as_deref(), Some("alpha"));
+        assert!(d2.receipt.decision.starts_with("FAILOVER"));
+    }
+
+    #[test]
+    fn provider_decisions_are_hash_chained() {
+        let g = Governor::new();
+        let d1 = g.select_provider("r1", "s1", None, &policy(), &|_| ProviderOutcome::Ok);
+        let d2 = g.select_provider("r2", "s1", None, &policy(), &|_| ProviderOutcome::Ok);
+        assert_ne!(d1.receipt.prev_hash, d2.receipt.prev_hash);
+        assert_eq!(d2.receipt.prev_hash.len(), 64);
+        let recent = g.recent_receipts(2);
+        assert!(recent.iter().all(|r| r.operation == "governor.select_provider"));
     }
 }
