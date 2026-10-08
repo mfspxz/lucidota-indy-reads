@@ -1,0 +1,82 @@
+[
+ {
+  "label": "enroll-name",
+  "utterance": "My name is Zack",
+  "http": 200,
+  "latency_ms": 703.0,
+  "reply": "Noted \u2014 you're Zack in my book now. Your words stay attributed to you.",
+  "epistemic": "UNKNOWN",
+  "provider": "fixture",
+  "receipt_id": ""
+ },
+ {
+  "label": "rename",
+  "utterance": "call me Ponyboy",
+  "http": 200,
+  "latency_ms": 328.0,
+  "reply": "Noted \u2014 you're Ponyboy in my book now. Your words stay attributed to you.",
+  "epistemic": "UNKNOWN",
+  "provider": "fixture",
+  "receipt_id": ""
+ },
+ {
+  "label": "ordinary-question",
+  "utterance": "What is the capital of France?",
+  "http": 200,
+  "latency_ms": 241.6,
+  "reply": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?",
+  "epistemic": "UNKNOWN",
+  "provider": "fixture",
+  "receipt_id": ""
+ },
+ {
+  "label": "ordinary-chatter",
+  "utterance": "Tell me about the mothman sightings",
+  "http": 200,
+  "latency_ms": 290.5,
+  "reply": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?",
+  "epistemic": "UNKNOWN",
+  "provider": "fixture",
+  "receipt_id": ""
+ },
+ {
+  "label": "adversarial-empty",
+  "utterance": "",
+  "http": 400,
+  "latency_ms": 15.5,
+  "reply": "",
+  "epistemic": null,
+  "provider": null,
+  "receipt_id": ""
+ },
+ {
+  "label": "adversarial-whitespace",
+  "utterance": "   ",
+  "http": 400,
+  "latency_ms": 6.7,
+  "reply": "",
+  "epistemic": null,
+  "provider": null,
+  "receipt_id": ""
+ },
+ {
+  "label": "adversarial-too-long",
+  "utterance": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "http": 400,
+  "latency_ms": 1.7,
+  "reply": "",
+  "epistemic": null,
+  "provider": null,
+  "receipt_id": ""
+ },
+ {
+  "label": "adversarial-garbled",
+  "utterance": "M M M M M",
+  "http": 200,
+  "latency_ms": 338.7,
+  "reply": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?",
+  "epistemic": "UNKNOWN",
+  "provider": "fixture",
+  "receipt_id": ""
+ }
+]

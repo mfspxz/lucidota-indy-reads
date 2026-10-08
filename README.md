@@ -72,6 +72,22 @@ Adversarial coverage: authority impersonation, forged epistemic state via
 voice/HTTP/MCP, fake verification, inference-laundering, malformed/oversized/
 unicode input, unknown tools, concurrent load. Bypasses found: **0**.
 
+## CI (remote readiness)
+
+`.github/workflows/ci.yml` mirrors the proven local gate, in order:
+`cargo fmt --check` → `cargo clippy --all-targets -D warnings` →
+`cargo test --all` → secret-scrub (vendored at `tools/secret-scrub.py`,
+changed-files semantics, fail-closed) → `./verify` behavioral smoke
+(localhost fixture mode, no keys, no network). The workflow promises nothing
+the local gate cannot deliver — every step was executed on the dev VM with
+the same pass/fail outcome as `./test` / `./verify`.
+
+**Parked activation:** the workflow is ready but not active. The single
+activation step is pushing this repo to GitHub, which is blocked until
+Zackary's Google passkey lands (GitHub OAuth via Google is parked; `gh` is
+not logged in). Nothing else is needed — no secrets, no custom runners, no
+external services. Push the repo and CI runs on the first commit.
+
 ## Embeddings
 
 `embeddings` organelle: `EmbeddingProvider` trait (embed/batch/model_id/state).

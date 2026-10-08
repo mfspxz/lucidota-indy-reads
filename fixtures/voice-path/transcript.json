@@ -1,0 +1,145 @@
+{
+ "session_id": "dccfb347-844b-41b4-8d47-761894e2ddb4",
+ "turns": [
+  {
+   "ended_at_ms": 1791491486664,
+   "intent": "NameEnrollment",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491486554,
+   "text": "My name is Zack"
+  },
+  {
+   "ended_at_ms": 1791491486664,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491486664,
+   "text": "Noted \u2014 you're Zack in my book now. Your words stay attributed to you."
+  },
+  {
+   "ended_at_ms": 1791491487220,
+   "intent": "NameEnrollment",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491487141,
+   "text": "call me Ponyboy"
+  },
+  {
+   "ended_at_ms": 1791491487220,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491487220,
+   "text": "Noted \u2014 you're Ponyboy in my book now. Your words stay attributed to you."
+  },
+  {
+   "ended_at_ms": 1791491487469,
+   "intent": "Question",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491487468,
+   "text": "What is the capital of France?"
+  },
+  {
+   "ended_at_ms": 1791491487469,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491487469,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491487712,
+   "intent": "Question",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491487711,
+   "text": "Tell me about the mothman sightings"
+  },
+  {
+   "ended_at_ms": 1791491487712,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491487712,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491488027,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491488026,
+   "text": "M M M M M"
+  },
+  {
+   "ended_at_ms": 1791491488027,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491488027,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491488410,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491488405,
+   "text": "parallel probe 0"
+  },
+  {
+   "ended_at_ms": 1791491488407,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491488406,
+   "text": "parallel probe 1"
+  },
+  {
+   "ended_at_ms": 1791491488407,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491488407,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen? What've you got, metal fuckin' sparkle pony?"
+  },
+  {
+   "ended_at_ms": 1791491488410,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491488410,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491488881,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491488666,
+   "text": "parallel probe 3"
+  },
+  {
+   "ended_at_ms": 1791491488881,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491488881,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491489126,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491488883,
+   "text": "parallel probe 4"
+  },
+  {
+   "ended_at_ms": 1791491489126,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491489126,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen?"
+  },
+  {
+   "ended_at_ms": 1791491489342,
+   "intent": "Converse",
+   "speaker": "Ponyboy",
+   "started_at_ms": 1791491489136,
+   "text": "parallel probe 2"
+  },
+  {
+   "ended_at_ms": 1791491489343,
+   "intent": "Respond",
+   "speaker": "INDY",
+   "started_at_ms": 1791491489342,
+   "text": "[fixture:indy] Mm. Fascinating. Tell me more -- but remember, I collect observations, not conclusions. What exactly was seen? What've you got, metal fuckin' sparkle pony?"
+  }
+ ]
+}

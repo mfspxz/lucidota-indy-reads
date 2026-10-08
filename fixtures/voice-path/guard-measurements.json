@@ -1,0 +1,63 @@
+{
+ "harness": "web/voice-guard-harness.mjs",
+ "target": "web/voice.js (real source, stubbed browser env)",
+ "measured_at_utc": "2026-10-08T20:41:22.239Z",
+ "checks": [
+  {
+   "name": "T1 one-turn-in-flight: 5 rapid results -> exactly 1 fetch",
+   "pass": true,
+   "detail": "5 results in 19ms produced 1 fetch call(s)"
+  },
+  {
+   "name": "T2 echo fingerprint: own words dropped, distinct accepted",
+   "pass": true,
+   "detail": "echo->0 fetches, distinct->1 fetch(es)"
+  },
+  {
+   "name": "T2b echo fingerprint is case/punctuation-insensitive",
+   "pass": true,
+   "detail": "garbled-echo produced 0 fetch(es)"
+  },
+  {
+   "name": "T3 setup: anchor speech ended",
+   "pass": true,
+   "detail": "speakEnd at t=1791492040866"
+  },
+  {
+   "name": "T3 probes valid (anchors accepted)",
+   "pass": true,
+   "detail": "a.valid=true b.valid=true"
+  },
+  {
+   "name": "T3 cooldown: dropped at 2400ms, accepted at 2600ms",
+   "pass": true,
+   "detail": "2400ms->dropped, 2600ms->accepted"
+  },
+  {
+   "name": "T3b measured cooldown boundary ~= 2500ms",
+   "pass": true,
+   "detail": "measured boundary ~2482ms (bisection [2475,2488])"
+  },
+  {
+   "name": "T4 probe turn started",
+   "pass": true,
+   "detail": "probe fetch=true, speak invoked=true"
+  },
+  {
+   "name": "T4b echo fingerprint armed before audio starts",
+   "pass": true,
+   "detail": "echo fired between speak() and audio-start produced 0 extra fetch(es)"
+  },
+  {
+   "name": "T5 empty/whitespace/single-char results start no turns",
+   "pass": true,
+   "detail": "0 fetch(es)"
+  },
+  {
+   "name": "T6 interim results never start turns",
+   "pass": true,
+   "detail": "0 fetch(es)"
+  }
+ ],
+ "verdict": "ALL GUARDS VERIFIED"
+}

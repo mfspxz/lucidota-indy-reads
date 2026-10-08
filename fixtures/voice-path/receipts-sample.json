@@ -1,0 +1,39 @@
+{
+ "receipt_count": 40,
+ "sample": [
+  {
+   "receipt_id": "0c5a7431-5c15-4a4b-af2b-fe6e5e775ec9",
+   "request_id": "06ff7204-e47f-4f9d-85e5-dc25a8462d3a",
+   "session_id": "dccfb347-844b-41b4-8d47-761894e2ddb4",
+   "timestamp_ms": 1791491489342,
+   "actor": "governor",
+   "operation": "turn.state",
+   "input_hash": "5bc32e1019f6a6f5ebd51443ec7a5212ecc519b5714655a1e753f3caa104e3d3",
+   "decision": "turn.complete",
+   "epistemic_status": null,
+   "evidence_ids": [],
+   "model": null,
+   "output_hash": "",
+   "duration_ms": 0,
+   "success": true,
+   "prev_hash": "cedaa96c13827bc4ee2f9cfeb96c65660cca45ff6dac6cd104ac5127e2b7b85e"
+  },
+  {
+   "receipt_id": "4c0a2d70-1da2-4ba3-b356-32092cd4ead3",
+   "request_id": "06ff7204-e47f-4f9d-85e5-dc25a8462d3a",
+   "session_id": "dccfb347-844b-41b4-8d47-761894e2ddb4",
+   "timestamp_ms": 1791491489342,
+   "actor": "governor",
+   "operation": "governor.decide",
+   "input_hash": "b8bd9274fd00c2edbc46343634de0a418817c303c1fba64e89436b7f1b8e700c",
+   "decision": "ALLOW",
+   "epistemic_status": "UNKNOWN",
+   "evidence_ids": [],
+   "model": null,
+   "output_hash": "",
+   "duration_ms": 0,
+   "success": true,
+   "prev_hash": "23ad0e84d767d2a535ece0cac401c2dda99642c49c857905a379507fd52cada9"
+  }
+ ]
+}

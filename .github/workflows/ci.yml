@@ -1,0 +1,86 @@
+# indy-reads CI — mirrors the proven local gate (./test + ./verify + secret-scrub).
+#
+# PARKED ACTIVATION (2026-10-08): this workflow is READY but not ACTIVE. The
+# single activation step is pushing this repo to GitHub, which is blocked
+# until Zackary's Google passkey lands (GitHub OAuth via Google is parked;
+# `gh` is not logged in). Nothing else is required: no secrets, no custom
+# runners, no external services — every job runs on stock ubuntu-latest with
+# zero credentials. Push the repo and this workflow runs on the first commit.
+#
+# HONESTY CONTRACT: this workflow promises NOTHING the local gate cannot
+# deliver. Every step below was executed on the dev VM and produced the same
+# pass/fail outcome as ./test and ./verify. If CI ever reports green while
+# behavioral proof is unknown, that is a bug in this file — work-order E3:
+# "CI must not report green while deployment identity and behavioral proof
+# stay unknown."
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # [1/5] format gate — mirrors ./test step 1
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      # [2/5] lint gate — mirrors ./test step 2
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # [3/5] contract tests — mirrors ./test step 3
+      - name: test
+        run: cargo test --all
+
+      # [4/5] secret-scrub gate — fail-closed, Oct-8 repair-wave mandate.
+      # Vendored at tools/secret-scrub.py (zero external deps); allowlist at
+      # .secrets-allowlist. Scans exactly what the push/PR would land — the
+      # pre-commit gate's "staged files" semantics translated to CI. A
+      # full-tree scan is deliberately NOT used: committed binaries, media
+      # assets, and Cargo.lock checksums false-positive the gate by design
+      # (64-char hashes, high-entropy blobs), and they are committed
+      # intentionally. Never prints matched values, only locations.
+      - name: secret-scrub
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1 >/dev/null 2>&1 || true
+            RANGE="origin/${{ github.base_ref }}...HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
+            else
+              RANGE="$BEFORE...${{ github.sha }}"
+            fi
+          fi
+          FILES="$(git diff --name-only --diff-filter=ACM "$RANGE" -- . || true)"
+          if [ -z "$FILES" ]; then
+            echo "scrub: no changed files to scan"
+          else
+            echo "$FILES"
+            # shellcheck disable=SC2086
+            python3 tools/secret-scrub.py $FILES
+          fi
+
+      # [5/5] behavioral smoke — mirrors ./verify. Starts a local instance in
+      # fixture mode (no keys), checks /health identity == source tree,
+      # completes a live turn, and verifies the receipt chain under the
+      # library's own indy-verify. Localhost only, no network, no secrets.
+      # This step RE-RUNS the build and tests by design: the workflow must not
+      # report green while behavioral proof is unknown.
+      - name: verify
+        run: ./verify
+        env:
+          INDY_VERIFY_PORT: 18080

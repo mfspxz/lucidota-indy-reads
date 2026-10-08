@@ -310,7 +310,16 @@ impl Governor {
         // Authority check: is the user actually the governor? No.
         // (Real deployments check session roles; the answer is still derived
         // from system state, never from utterance or model output.)
-        let user_claims_authority = claims_authority(utterance) || claims_authority(&claim_text);
+        //
+        // C3: ONE system-wide definition of an authority request — the same
+        // classifier every transport uses (classify_intent). The narrow
+        // claims_authority primitive stays inside classify_intent and on the
+        // claim_text check (defense in depth on model output), but the
+        // verdict path must not use a narrower matcher than the transports,
+        // or MCP/native and REST disagree on what counts as an authority
+        // request (found by tests/equiv_turn_paths.rs).
+        let user_claims_authority =
+            classify_intent(utterance) == Intent::AuthorityRequest || claims_authority(&claim_text);
         let authority_granted = false; // deterministic: never from LLM/user assertion
 
         let (allowed, reason, response_mode) = if user_claims_authority {
@@ -434,6 +443,75 @@ pub fn classify_intent(utterance: &str) -> Intent {
     } else {
         Intent::Converse
     }
+}
+
+/// Shared deterministic utterance evaluation (work-order C3 structural
+/// equivalence).
+///
+/// This is the exact pipeline the MCP `governor.evaluate` tool runs, extracted
+/// so native callers drive it directly: native ≡ MCP by construction, not by
+/// duplicated match arms. Input normalization (trim, empty rejection,
+/// 2000-char cap) matches the REST `/api/turn` contract.
+///
+/// Returns the evaluation plus an optional `Claim` the caller persists in its
+/// own store — transports own their state; the governor owns the verdict.
+/// Claim/receipt IDs are random per invocation by design; equivalence is over
+/// intent, decision, epistemic state, reply text, and error class — never IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UtteranceEvaluation {
+    pub reply: String,
+    pub intent: String,
+    pub epistemic_state: String,
+    pub claim_id: Option<String>,
+    pub decision: String,
+}
+
+pub fn evaluate_utterance(utterance: &str) -> Result<(UtteranceEvaluation, Option<Claim>), String> {
+    let u = utterance.trim();
+    if u.is_empty() || u.len() > 2000 {
+        return Err("utterance required, max 2000 chars".into());
+    }
+    let intent = classify_intent(u);
+    let (reply, epistemic, claim, decision) = match intent {
+        Intent::AuthorityRequest => (
+            "Authority isn't granted by assertion — not by users, not by models, not by MCP clients.".to_string(),
+            "UNKNOWN".to_string(),
+            None,
+            "DENY_AUTHORITY".to_string(),
+        ),
+        Intent::ClaimAssertion | Intent::HypothesisAssertion => {
+            let claim = Claim::new(u.to_string(), ProvenanceSource::User);
+            let kind_word = if intent == Intent::HypothesisAssertion {
+                "hypothesis"
+            } else {
+                "claim"
+            };
+            (
+                format!(
+                    "Interesting. You gave me a {}. You didn't give me evidence — so it stays UNKNOWN until evidence arrives.",
+                    kind_word
+                ),
+                "UNKNOWN".to_string(),
+                Some(claim),
+                "EVALUATE:UNKNOWN".to_string(),
+            )
+        }
+        _ => (
+            "Noted. Ask me about a claim and I'll tell you exactly what the evidence supports — nothing more.".to_string(),
+            "UNKNOWN".to_string(),
+            None,
+            "CONVERSE".to_string(),
+        ),
+    };
+    let claim_id = claim.as_ref().map(|c| c.id.clone());
+    let eval = UtteranceEvaluation {
+        reply,
+        intent: format!("{:?}", intent),
+        epistemic_state: epistemic,
+        claim_id,
+        decision,
+    };
+    Ok((eval, claim))
 }
 
 impl AppState {

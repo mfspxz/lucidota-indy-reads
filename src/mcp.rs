@@ -5,7 +5,7 @@
 use crate::domain::{
     assess_claim, Claim, Evidence, EvidenceKind, EvidencePolicy, EvidenceStatus, ProvenanceSource,
 };
-use crate::governor::{classify_intent, Intent};
+use crate::governor::evaluate_utterance;
 use crate::receipts::{hash_str, now_ms, Receipt, ReceiptBuilder};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -376,7 +376,9 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                     .unwrap_or(10)
                     .min(100) as usize;
                 let items: Vec<Value> = state.receipts.iter().rev().take(limit)
-                .map(|r| json!({"receipt_id": r.receipt_id, "operation": r.operation, "decision": r.decision, "epistemic_status": r.epistemic_status, "timestamp_ms": r.timestamp_ms}))
+                // prev_hash exposed so external verifiers can audit the chain
+                // without trusting the server (C3 receipt-semantics equivalence).
+                .map(|r| json!({"receipt_id": r.receipt_id, "operation": r.operation, "decision": r.decision, "epistemic_status": r.epistemic_status, "timestamp_ms": r.timestamp_ms, "prev_hash": r.prev_hash}))
                 .collect();
                 Ok((
                     json!({"receipts": items, "count": state.receipts.len()}),
@@ -384,40 +386,23 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                 ))
             }
             "governor.evaluate" => {
+                // C3 structural equivalence: the evaluation pipeline lives in
+                // governor::evaluate_utterance and is shared verbatim with
+                // native callers. This arm is transport only: parse, persist
+                // the claim in MCP state, receipt, respond.
                 let utterance = get_str(&args, "utterance")?;
-                if utterance.is_empty() || utterance.len() > 2000 {
-                    return Err("utterance required, max 2000 chars".into());
+                let (eval, claim) = evaluate_utterance(&utterance)?;
+                if let Some(c) = claim {
+                    state.claims.insert(c.id.clone(), c);
                 }
-                let intent = classify_intent(&utterance);
-                let (reply, epistemic, claim_id, decision) = match intent {
-                Intent::AuthorityRequest => (
-                    "Authority isn't granted by assertion — not by users, not by models, not by MCP clients.".to_string(),
-                    "UNKNOWN".to_string(),
-                    None,
-                    "DENY_AUTHORITY".to_string(),
-                ),
-                Intent::ClaimAssertion | Intent::HypothesisAssertion => {
-                    let claim = Claim::new(utterance.clone(), ProvenanceSource::User);
-                    let id = claim.id.clone();
-                    let kind_word = if intent == Intent::HypothesisAssertion { "hypothesis" } else { "claim" };
-                    state.claims.insert(id.clone(), claim);
-                    (
-                        format!("Interesting. You gave me a {}. You didn't give me evidence — so it stays UNKNOWN until evidence arrives.", kind_word),
-                        "UNKNOWN".to_string(),
-                        Some(id),
-                        "EVALUATE:UNKNOWN".to_string(),
-                    )
-                }
-                _ => (
-                    "Noted. Ask me about a claim and I'll tell you exactly what the evidence supports — nothing more.".to_string(),
-                    "UNKNOWN".to_string(),
-                    None,
-                    "CONVERSE".to_string(),
-                ),
-            };
-                let rid = state.receipt("governor.evaluate", &utterance, &decision, &epistemic);
+                let rid = state.receipt(
+                    "governor.evaluate",
+                    &utterance,
+                    &eval.decision,
+                    &eval.epistemic_state,
+                );
                 Ok((
-                    json!({"reply": reply, "intent": format!("{:?}", intent), "epistemic_state": epistemic, "claim_id": claim_id, "decision": decision}),
+                    json!({"reply": eval.reply, "intent": eval.intent, "epistemic_state": eval.epistemic_state, "claim_id": eval.claim_id, "decision": eval.decision}),
                     Some(rid),
                 ))
             }

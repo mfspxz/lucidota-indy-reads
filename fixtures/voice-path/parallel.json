@@ -1,0 +1,32 @@
+[
+ {
+  "i": 0,
+  "http": 200,
+  "latency_ms": 483.8,
+  "receipt_id": ""
+ },
+ {
+  "i": 1,
+  "http": 200,
+  "latency_ms": 264.4,
+  "receipt_id": ""
+ },
+ {
+  "i": 2,
+  "http": 200,
+  "latency_ms": 1141.4,
+  "receipt_id": ""
+ },
+ {
+  "i": 3,
+  "http": 200,
+  "latency_ms": 723.7,
+  "receipt_id": ""
+ },
+ {
+  "i": 4,
+  "http": 200,
+  "latency_ms": 933.8,
+  "receipt_id": ""
+ }
+]
