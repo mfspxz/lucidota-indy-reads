@@ -1,0 +1,22 @@
+[package]
+name = "governor-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Spike: pure deterministic Indy_Reads governor logic compiled to wasm32-unknown-unknown. No axum/tokio/rusqlite/reqwest — those stay server-side."
+
+[lib]
+crate-type = ["cdylib"]
+
+# Detach from any parent workspace; this crate builds standalone.
+[workspace]
+
+[dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true

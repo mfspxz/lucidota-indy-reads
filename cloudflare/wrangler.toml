@@ -1,0 +1,35 @@
+# Indy_Reads edge deployment (Cloudflare-first, Vercel-second for UI).
+#
+# PROVISIONED 2026-10-08: D1 `indy-reads` live (see database_id below), schema
+# applied from d1-schema.sql. Vectorize + R2 NOT provisioned: the
+# custom.cloudflare token returns 403 on those endpoints (scope gap, not a
+# code gap) — bindings left declared-but-commented until the token is widened.
+# Local SQLite (src/store.rs) remains the canonical store; D1 mirrors it.
+
+name = "indy-reads"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# D1: WHAT EXISTS (canonical graph metadata)
+[[d1_databases]]
+binding = "INDY_D1"
+database_name = "indy-reads"
+database_id = "efb12a66-2a06-4ffb-9084-188589a23f85"  # provisioned 2026-10-08
+
+# Vectorize: WHAT IS SEMANTICALLY RELATED (candidates only, never truth)
+# PENDING token scope (403 on vectorize API 2026-10-08) — uncomment when widened.
+# [[vectorize]]
+# binding = "INDY_VEC"
+# index_name = "indy-embeddings"
+# 384 dimensions to match Ternlight output
+
+# R2: BIG THINGS (audio, evidence artifacts)
+# PENDING token scope (403 on r2 API 2026-10-08) — uncomment when widened.
+# [[r2_buckets]]
+# binding = "INDY_R2"
+# bucket_name = "indy-reads-artifacts"
+
+[vars]
+EMBEDDING_MODEL = "ternlight/base@0.1.0"
+EMBEDDING_DIM = "384"
+EVIDENCE_POLICY = "research.standard.v1"

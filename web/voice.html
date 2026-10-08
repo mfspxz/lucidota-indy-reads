@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>Indy — talk to her</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #05070c; }
+  body {
+    background: radial-gradient(ellipse 90% 70% at 50% 38%, #101828 0%, #070b14 55%, #030509 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-family: system-ui, sans-serif; -webkit-tap-highlight-color: transparent;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 120% 100% at 50% 50%, transparent 55%, rgba(0,0,0,.75) 100%);
+  }
+  #stage { position: relative; width: min(92vmin, 560px); aspect-ratio: 200/235; }
+  #glow {
+    position: absolute; inset: -12%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(120,140,255,.14) 0%, transparent 65%);
+    transition: background 1.2s ease; pointer-events: none;
+  }
+  body.listening #glow { background: radial-gradient(circle, rgba(90,160,255,.20) 0%, transparent 65%); }
+  body.speaking #glow { background: radial-gradient(circle, rgba(255,150,90,.20) 0%, transparent 65%); }
+  body.thinking #glow { background: radial-gradient(circle, rgba(170,120,255,.18) 0%, transparent 65%); }
+  #puppet { width: 100%; height: 100%; display: block; filter: drop-shadow(0 18px 50px rgba(0,0,0,.6)); }
+  #puppet.speaking { animation: bob 0.55s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
+  #log {
+    position: fixed; top: 10px; left: 10px; right: 10px; max-height: 34vh; overflow-y: auto;
+    font-family: monospace; font-size: 11px; line-height: 1.5; color: #9fe8a9;
+    background: rgba(0,0,0,.55); border: 1px solid #1d2b1d; border-radius: 8px;
+    padding: 8px 10px; white-space: pre-wrap; word-break: break-word; z-index: 10;
+  }
+  #log .err { color: #ff8a8a; }
+  #log .warn { color: #ffd88a; }
+  #dot {
+    position: fixed; bottom: max(26px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+    width: 10px; height: 10px; border-radius: 50%; background: #3a4356;
+    transition: background .4s, box-shadow .4s;
+  }body.listening #dot { background: #5aa0ff; box-shadow: 0 0 14px #5aa0ff; animation: pulse 1.6s ease-in-out infinite; }
+  body.speaking #dot { background: #ff9a5a; box-shadow: 0 0 14px #ff9a5a; }
+  body.thinking #dot { background: #aa78ff; box-shadow: 0 0 14px #aa78ff; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  #fallback {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    color: #8b949e; font-size: 15px; text-align: center; padding: 32px; line-height: 1.6;
+  }
+  #demobtn {
+    position: fixed; top: max(14px, env(safe-area-inset-top)); right: 14px; z-index: 20;
+    background: rgba(20,28,44,.85); color: #c9d4e8; border: 1px solid #3a4a68;
+    border-radius: 10px; padding: 10px 16px; font-size: 13px; font-weight: 600;
+    letter-spacing: .06em; cursor: pointer;
+  }
+  #demobtn:active { background: rgba(40,56,88,.95); }
+  #modebtn {
+    position: fixed; top: max(14px, env(safe-area-inset-top)); left: 14px; z-index: 20;
+    background: rgba(20,28,44,.85); color: #c9d4e8; border: 1px solid #3a4a68;
+    border-radius: 10px; padding: 10px 16px; font-size: 13px; font-weight: 600;
+    letter-spacing: .06em; cursor: pointer;
+  }
+  #modebtn:active { background: rgba(40,56,88,.95); }
+  #talkbtn {
+    position: fixed; bottom: max(64px, calc(env(safe-area-inset-bottom) + 48px)); left: 50%;
+    transform: translateX(-50%); z-index: 20; display: none;
+    align-items: center; justify-content: center;
+    width: 84px; height: 84px; border-radius: 50%;
+    background: radial-gradient(circle, #2a3a58 0%, #141c2e 100%);
+    border: 2px solid #5aa0ff; color: #fff; font-size: 34px;
+    cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none;
+  }
+  #talkbtn.holding { background: radial-gradient(circle, #ff9a5a 0%, #7a3a18 100%); border-color: #ffb37a; }
+  #talkbtn small { position: absolute; bottom: -20px; font-size: 10px; color: #8b949e; letter-spacing: .08em; }
+  .demo-overlay {
+    position: fixed; inset: 0; z-index: 30; overflow-y: auto;
+    background: rgba(4,7,12,.97); color: #e8e4da; padding: 28px 22px 60px;
+    font-family: system-ui, sans-serif; cursor: pointer;
+    animation: demoin .25s ease;
+  }
+  @keyframes demoin { from { opacity: 0; } to { opacity: 1; } }
+  .demo-tag {
+    font-family: monospace; font-size: 10px; color: #8a6d1f; letter-spacing: .08em;
+    border: 1px solid #8a6d1f; border-radius: 6px; padding: 6px 10px; display: inline-block;
+    margin-bottom: 14px;
+  }
+  .demo-title { font-size: 20px; letter-spacing: .04em; margin-bottom: 6px; color: #fff; }
+  .demo-kicker { font-size: 13px; color: #8b949e; margin-bottom: 14px; font-style: italic; }
+  .demo-user {
+    font-size: 17px; color: #9fc5ff; border-left: 3px solid #5aa0ff;
+    padding: 8px 12px; margin-bottom: 16px; line-height: 1.5;
+  }
+  .demo-stages { margin-bottom: 16px; }
+  .demo-stage {
+    display: flex; gap: 10px; align-items: baseline; padding: 7px 10px;
+    background: rgba(20,28,44,.6); border-radius: 8px; margin-bottom: 6px;
+    animation: stagein .3s ease both;
+  }
+  @keyframes stagein { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+  .demo-stage-label { font-family: monospace; font-size: 11px; color: #ff9a5a; font-weight: 700; white-space: nowrap; }
+  .demo-stage-detail { font-size: 12.5px; color: #c9d4e8; }
+  .demo-graph { width: 100%; max-width: 380px; display: block; margin: 4px auto 16px; }
+  .demo-indy {
+    font-size: 16.5px; line-height: 1.6; color: #fff; border-left: 3px solid #ff9a5a;
+    padding: 8px 12px; margin-bottom: 16px;
+  }
+  .demo-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; }
+  .demo-epistemic, .demo-receipt {
+    font-family: monospace; font-size: 11px; padding: 6px 10px; border-radius: 6px;
+  }
+  .demo-epistemic { background: rgba(138,109,31,.25); color: #e8c84a; border: 1px solid #8a6d1f; }
+  .demo-receipt { background: rgba(58,67,86,.4); color: #8b949e; border: 1px solid #3a4356; }
+  .demo-hint { text-align: center; font-size: 12px; color: #5a6478; letter-spacing: .1em; }
+  @media (prefers-reduced-motion: reduce) { #puppet.speaking { animation: none; } }
+</style>
+</head>
+<body class="listening">
+<div id="stage">
+  <div id="glow"></div>
+  <svg id="puppet" viewBox="0 0 200 230" aria-label="Indy">
+    <path id="hair" d="M36,92 Q32,28 100,22 Q168,28 164,92 Q162,130 150,148 Q146,120 148,96 Q140,60 100,56 Q60,60 52,96 Q54,120 50,148 Q38,130 36,92 Z" fill="#7a2e18" stroke="#3d1608" stroke-width="2"/>
+    <path d="M52,60 Q70,34 104,30" fill="none" stroke="#c97b4a" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+    <path d="M148,60 Q130,34 96,30" fill="none" stroke="#a34a24" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+    <rect x="88" y="150" width="24" height="26" fill="#e8b88f" stroke="#3d1608" stroke-width="2"/>
+    <path d="M50,230 Q54,174 86,166 L114,166 Q146,174 150,230 Z" fill="#232b36" stroke="#10141a" stroke-width="2"/>
+    <path d="M86,166 L100,196 L114,166" fill="#e8e4da" stroke="#10141a" stroke-width="1.5"/>
+    <path d="M86,166 L96,196 L88,200 Z" fill="#2e3844" stroke="#10141a" stroke-width="1.5"/>
+    <path d="M114,166 L104,196 L112,200 Z" fill="#2e3844" stroke="#10141a" stroke-width="1.5"/>
+    <ellipse id="head" cx="100" cy="105" rx="56" ry="64" fill="#f0c8a8" stroke="#3d1608" stroke-width="2.5"/>
+    <g fill="#b57a4a" opacity="0.55">
+      <circle cx="82" cy="118" r="1.1"/><circle cx="88" cy="122" r="0.9"/><circle cx="76" cy="124" r="0.9"/>
+      <circle cx="118" cy="118" r="1.1"/><circle cx="112" cy="122" r="0.9"/><circle cx="124" cy="124" r="0.9"/>
+      <circle cx="100" cy="116" r="0.9"/>
+    </g>
+    <path d="M44,80 Q50,44 100,40 Q150,44 156,80 Q140,58 118,62 Q126,70 122,78 Q104,54 78,60 Q60,64 56,84 Q48,82 44,80 Z" fill="#7a2e18" stroke="#3d1608" stroke-width="2"/>
+    <path d="M60,58 Q84,46 116,50" fill="none" stroke="#c97b4a" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+    <line id="brow-l" x1="62" y1="82" x2="90" y2="80" stroke="#3d1608" stroke-width="3.5" stroke-linecap="round"/>
+    <line id="brow-r" x1="110" y1="80" x2="138" y2="82" stroke="#3d1608" stroke-width="3.5" stroke-linecap="round"/>
+    <g id="eye-l"><ellipse cx="76" cy="102" rx="10" ry="5.5" fill="#fff" stroke="#3d1608" stroke-width="2"/><circle id="pupil-l" cx="76" cy="102" r="3.2" fill="#1d2b1d"/></g>
+    <g id="eye-r"><ellipse cx="124" cy="102" rx="10" ry="5.5" fill="#fff" stroke="#3d1608" stroke-width="2"/><circle id="pupil-r" cx="124" cy="102" r="3.2" fill="#1d2b1d"/></g>
+    <path d="M100,108 L96,124 L104,124" fill="none" stroke="#3d1608" stroke-width="2" stroke-linecap="round"/>
+    <path id="mouth" d="M84,146 Q100,150 116,144" fill="none" stroke="#7a2e18" stroke-width="3" stroke-linecap="round"/>
+    <g id="overlay" opacity="0.95">
+      <rect x="58" y="6" width="84" height="22" rx="6" id="overlay-bg" fill="#8a6d1f" stroke="#241a12" stroke-width="1.5"/>
+      <text id="overlay-text" x="100" y="21" text-anchor="middle" font-size="13" font-family="monospace" fill="#fff">—</text>
+    </g>
+  </svg>
+</div>
+<div id="dot"></div>
+<div id="log"></div>
+<button id="demobtn" type="button">Demo Mode</button>
+<button id="modebtn" type="button">🎙 Always on</button>
+<button id="talkbtn" type="button" aria-label="Hold to talk">🎙<small>HOLD TO TALK</small></button>
+<div id="fallback"></div>
+<script src="prosody.js"></script>
+<script src="governor-wasm-loader.js"></script>
+<script src="voice.js"></script>
+<script src="demo.js"></script>
+<script>
+  document.getElementById('demobtn').addEventListener('click', function () {
+    if (window.__indyDemo) window.__indyDemo.enter();
+  });
+  document.getElementById('modebtn').addEventListener('click', function () {
+    if (window.__indyMode) window.__indyMode.set(!window.__indyMode.tap);
+  });
+  (function () {
+    var tb = document.getElementById('talkbtn');
+    var start = function (e) { e.preventDefault(); tb.classList.add('holding'); if (window.__indyMode) window.__indyMode.holdStart(); };
+    var end = function (e) { if (e) e.preventDefault(); tb.classList.remove('holding'); if (window.__indyMode) window.__indyMode.holdEnd(); };
+    tb.addEventListener('pointerdown', start);
+    tb.addEventListener('pointerup', end);
+    tb.addEventListener('pointercancel', end);
+    tb.addEventListener('pointerleave', end);
+    tb.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  })();
+</script>
+</body>
+</html>

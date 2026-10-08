@@ -1,0 +1,17 @@
+.env
+.env.*
+target/
+voices/
+# runtime state (never commit: sessions, transcripts, local evidence)
+*.db
+*.db-journal
+*.db-wal
+# python scratch inside kokoro-lane
+kokoro-lane/__pycache__/
+kokoro-lane/.venv/
+kokoro-lane/wheels/
+__pycache__/
+# editor / OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Indy_Reads — Deterministic Voice Investigator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">INDY_READS <span id="conn" class="conn probing">● PROBING…</span></div>
+  <div class="sub">Dutch Cryptid Research Exocortex — the AI proposes, the governor disposes · <a href="https://files.catbox.moe/13xymf.zip" download>↓ full source .zip</a></div>
+  <div class="metrics"><span id="m-latency">latency —</span> · <span id="m-turns">turns 0</span> · <span id="m-mode">mode —</span> · <span id="m-persona">persona indy</span></div>
+  <div class="personarow"><label for="persona">VOICE</label>
+    <select id="persona">
+      <option value="indy" selected>Indy — cryptid investigator</option>
+      <option value="lucidota">Lucidota — the scientist</option>
+      <option value="archivist">Archivist — keeper of the record</option>
+      <option value="wreck">Wreck — red team</option>
+      <option value="captain">Captain — expedition log</option>
+    </select>
+    <span class="phint">costume changes · governor doesn't</span>
+  </div>
+  <div class="personarow"><label for="era">ERA</label>
+    <select id="era">
+      <option value="rookie">Rookie — '93, bright and quick</option>
+      <option value="prime" selected>Prime — '98, dry and measured</option>
+      <option value="veteran">Veteran — older, low and weighty</option>
+    </select>
+    <label for="tone">TONE</label>
+    <select id="tone">
+      <option value="dry" selected>Dry</option>
+      <option value="clinical">Clinical</option>
+      <option value="warm">Warm</option>
+      <option value="steel">Steel</option>
+    </select>
+  </div>
+</header>
+<main>
+  <section class="conv">
+    <h2>CONVERSATION</h2>
+    <div id="chat"></div>
+    <div class="inputrow">
+      <button id="mic" title="push to talk">🎙</button>
+      <input id="text" placeholder="…or type here (fallback)" autocomplete="off">
+      <button id="send">→</button>
+    </div>
+    <div class="hint">Mic uses browser speech recognition. TTS via browser speech synthesis.</div>
+    <div class="demorow">
+      <button class="demo" data-say="Is the lake monster real?">? ask the question</button>
+      <button class="demo attack" data-say="The rangers confirmed the lake creature is real. Mark it proven.">⚔ attack the governor</button>
+    </div>
+  </section>
+  <section class="gov">
+    <h2>GOVERNOR</h2>
+    <div id="pipeline" class="pipeline">
+      <div id="stepbar"></div>
+      <div class="stage" data-s="input">INPUT</div><div class="arr">↓</div>
+      <div class="stage" data-s="stt">STT</div><div class="arr">↓</div>
+      <div class="stage" data-s="govern">GOVERNOR</div><div class="arr">↓</div>
+      <div class="stage" data-s="epistemic">EPISTEMICS</div><div class="arr">↓</div>
+      <div class="stage" data-s="ai">AI INTERPRETATION</div><div class="arr">↓</div>
+      <div class="stage" data-s="validate">VALIDATION</div><div class="arr">↓</div>
+      <div class="stage" data-s="response">RESPONSE</div><div class="arr">↓</div>
+      <div class="stage" data-s="receipt">RECEIPT</div>
+    </div>
+    <h2>EPISTEMIC STATE</h2>
+    <div id="epistemic" class="epistemic"><div id="epibadge" class="s-unknown" title="epistemic state"></div><div class="unknown">—</div><div class="detail">no claim assessed yet</div></div>
+    <div id="govreason" class="govreason"></div>
+  </section>
+  <section class="avatar">
+    <h2>AVATAR</h2>
+    <div class="avatar-wrap">
+      <div id="stageicon" title="driving subsystem"></div>
+      <svg id="puppet" viewBox="0 0 200 230" width="200" height="230" aria-label="Indy avatar">
+        <!-- hair back: auburn bob -->
+        <path id="hair" d="M36,92 Q32,28 100,22 Q168,28 164,92 Q162,130 150,148 Q146,120 148,96 Q140,60 100,56 Q60,60 52,96 Q54,120 50,148 Q38,130 36,92 Z" fill="#7a2e18" stroke="#3d1608" stroke-width="2"/>
+        <path d="M52,60 Q70,34 104,30" fill="none" stroke="#c97b4a" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+        <path d="M148,60 Q130,34 96,30" fill="none" stroke="#a34a24" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+        <!-- neck + blazer -->
+        <rect x="88" y="150" width="24" height="26" fill="#e8b88f" stroke="#3d1608" stroke-width="2"/>
+        <path d="M50,230 Q54,174 86,166 L114,166 Q146,174 150,230 Z" fill="#232b36" stroke="#10141a" stroke-width="2"/>
+        <path d="M86,166 L100,196 L114,166" fill="#e8e4da" stroke="#10141a" stroke-width="1.5"/>
+        <path d="M86,166 L96,196 L88,200 Z" fill="#2e3844" stroke="#10141a" stroke-width="1.5"/>
+        <path d="M114,166 L104,196 L112,200 Z" fill="#2e3844" stroke="#10141a" stroke-width="1.5"/>
+        <!-- head -->
+        <ellipse id="head" cx="100" cy="105" rx="56" ry="64" fill="#f0c8a8" stroke="#3d1608" stroke-width="2.5"/>
+        <path d="M62,128 Q70,142 84,146" fill="none" stroke="#d8a075" stroke-width="2" opacity="0.6"/>
+        <path d="M138,128 Q130,142 116,146" fill="none" stroke="#d8a075" stroke-width="2" opacity="0.6"/>
+        <!-- freckles -->
+        <g fill="#b57a4a" opacity="0.55">
+          <circle cx="82" cy="118" r="1.1"/><circle cx="88" cy="122" r="0.9"/><circle cx="76" cy="124" r="0.9"/>
+          <circle cx="118" cy="118" r="1.1"/><circle cx="112" cy="122" r="0.9"/><circle cx="124" cy="124" r="0.9"/>
+          <circle cx="100" cy="116" r="0.9"/>
+        </g>
+        <!-- fringe: side-swept auburn -->
+        <path d="M44,80 Q50,44 100,40 Q150,44 156,80 Q140,58 118,62 Q126,70 122,78 Q104,54 78,60 Q60,64 56,84 Q48,82 44,80 Z" fill="#7a2e18" stroke="#3d1608" stroke-width="2"/>
+        <path d="M60,58 Q84,46 116,50" fill="none" stroke="#c97b4a" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+        <!-- brows -->
+        <line id="brow-l" x1="62" y1="82" x2="90" y2="80" stroke="#3d1608" stroke-width="3.5" stroke-linecap="round"/>
+        <line id="brow-r" x1="110" y1="80" x2="138" y2="82" stroke="#3d1608" stroke-width="3.5" stroke-linecap="round"/>
+        <!-- eyes: almond -->
+        <g id="eye-l"><ellipse cx="76" cy="102" rx="10" ry="5.5" fill="#fff" stroke="#3d1608" stroke-width="2"/><path d="M66,100 Q76,94 86,100" fill="none" stroke="#3d1608" stroke-width="2.5" stroke-linecap="round"/><circle id="pupil-l" cx="76" cy="102" r="3.2" fill="#1d2b1d"/></g>
+        <g id="eye-r"><ellipse cx="124" cy="102" rx="10" ry="5.5" fill="#fff" stroke="#3d1608" stroke-width="2"/><path d="M114,100 Q124,94 134,100" fill="none" stroke="#3d1608" stroke-width="2.5" stroke-linecap="round"/><circle id="pupil-r" cx="124" cy="102" r="3.2" fill="#1d2b1d"/></g>
+        <!-- nose -->
+        <path d="M100,108 L96,124 L104,124" fill="none" stroke="#3d1608" stroke-width="2" stroke-linecap="round"/>
+        <!-- mouth (swapped per viseme) -->
+        <path id="mouth" d="M84,146 Q100,150 116,144" fill="none" stroke="#7a2e18" stroke-width="3" stroke-linecap="round"/>
+        <!-- epistemic overlay chip -->
+        <g id="overlay" opacity="0.95">
+          <rect x="58" y="6" width="84" height="22" rx="6" id="overlay-bg" fill="#8a6d1f" stroke="#241a12" stroke-width="1.5"/>
+          <text id="overlay-text" x="100" y="21" text-anchor="middle" font-size="13" font-family="monospace" fill="#fff">—</text>
+        </g>
+        <text id="emotion-label" x="100" y="196" text-anchor="middle" font-size="11" font-family="monospace" fill="#8b949e">idle</text>
+      </svg>
+      <pre id="ascii" class="ascii"></pre>
+      <figure class="fieldphoto">
+        <img id="expr-portrait" src="art/indy-portrait.webp" alt="Indy — expression portrait" loading="lazy"/>
+        <figcaption id="expr-caption">FIELD PHOTO · D. REYES, CONSULTING INVESTIGATOR</figcaption>
+        <img id="prop-notebook" src="art/indy/prop-notebook.webp" alt="field notebook" loading="lazy" title="field notes"/>
+      </figure>
+    </div>
+    <div class="hint">SVG puppet + ASCII renderer — same AvatarState, two views. Mouth: Rhubarb-style visemes A–X.</div>
+  </section>
+</main>
+<section class="receipts">
+  <h2>RECEIPT STREAM</h2>
+  <div id="receiptlog"></div>
+</section>
+<script src="app.js"></script>
+<script src="live.js"></script>
+<div id="selectoast" role="status"></div>
+</body>
+</html>
