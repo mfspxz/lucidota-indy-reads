@@ -1,26 +1,35 @@
 //! HTTP + WebSocket API.
+//!
+//! API contract version. Bump when a route is added/removed or a request/
+//! response schema changes in a breaking way. Surfaced on /health and baked
+//! into the release bundle (E4) so a running artifact's contract can be
+//! compared against the source it claims to be.
+pub const CONTRACT_VERSION: &str = "1";
 
 use crate::ai::AiClient;
-use indy_reads::domain::{EpistemicStatus, Evidence, Session};
-use indy_reads::theater::{Novelty, TheaterCue, TheaterEngine, TheaterEvent};
-use indy_reads::voice::{attempt_clone, decide_clone, derive_voice_full, CloneDecision, CloneError, ScullyEra, Tone, VoiceProvenance, VoiceState};
-use indy_reads::alebex::{
-    create_live_session, custom_tools_json, AlebexError, BrowserOut, CallState, EngineOut,
-};
-use indy_reads::avatar::{derive_avatar, viseme_timeline, AvatarState};
-use indy_reads::diarize::{speakers, Diarizer};
-use indy_reads::governor::{classify_intent, AppState, GovernorDecision};
-use indy_reads::mcp;
-use indy_reads::receipts::{now_ms, ClaimRevision, Receipt, ReceiptBuilder};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
     http::StatusCode,
-    response::{Html, IntoResponse, Json},
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
+};
+use indy_reads::alebex::{
+    create_live_session, custom_tools_json, AlebexError, BrowserOut, CallState, EngineOut,
+};
+use indy_reads::avatar::{derive_avatar, viseme_timeline, AvatarState};
+use indy_reads::diarize::{speakers, Diarizer};
+use indy_reads::domain::{EpistemicStatus, Evidence, Session};
+use indy_reads::governor::{classify_intent, AppState};
+use indy_reads::mcp;
+use indy_reads::receipts::{now_ms, ClaimRevision, Receipt};
+use indy_reads::theater::{Novelty, TheaterCue, TheaterEngine, TheaterEvent};
+use indy_reads::voice::{
+    attempt_clone, decide_clone, derive_voice_full, CloneDecision, CloneError, ScullyEra, Tone,
+    VoiceProvenance, VoiceState,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -30,7 +39,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 fn is_safe_session_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -66,17 +77,34 @@ struct CorrectionOf {
 fn detect_correction(utterance: &str) -> Option<String> {
     let lower = utterance.to_lowercase();
     // Order matters: check the strongest signals first.
-    for pat in ["no, sorry", "no sorry", "i meant", "correction:", "correction -"] {
+    for pat in [
+        "no, sorry",
+        "no sorry",
+        "i meant",
+        "correction:",
+        "correction -",
+    ] {
         if let Some(i) = lower.find(pat) {
-            let rest = utterance[i + pat.len()..].trim().trim_matches(|c| c == ',' || c == ':' || c == '-').trim();
-            return Some(if rest.is_empty() { "unspecified".to_string() } else { rest.chars().take(120).collect() });
+            let rest = utterance[i + pat.len()..]
+                .trim()
+                .trim_matches(|c| c == ',' || c == ':' || c == '-')
+                .trim();
+            return Some(if rest.is_empty() {
+                "unspecified".to_string()
+            } else {
+                rest.chars().take(120).collect()
+            });
         }
     }
     // "actually, X" / "actually X" at turn start.
     for pat in ["actually, ", "actually "] {
         if lower.starts_with(pat) {
             let rest = utterance[pat.len()..].trim();
-            return Some(if rest.is_empty() { "unspecified".to_string() } else { rest.chars().take(120).collect() });
+            return Some(if rest.is_empty() {
+                "unspecified".to_string()
+            } else {
+                rest.chars().take(120).collect()
+            });
         }
     }
     None
@@ -107,9 +135,8 @@ struct CloneAudioView {
 
 /// Minimal base64 (standard alphabet). No new dependency for one field.
 fn base64_encode(bytes: &[u8]) -> String {
-    const ALPH: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    const ALPH: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -193,7 +220,7 @@ impl From<&AvatarState> for AvatarView {
             gesture: format!("{:?}", s.gesture),
             epistemic_overlay: s.epistemic_overlay.clone(),
             speaking: s.speaking,
-        visemes: vec![],
+            visemes: vec![],
         }
     }
 }
@@ -219,7 +246,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/mcp/tools", get(mcp_tools))
         .route("/api/mcp/:tool", post(mcp_call))
         .route("/ws", get(ws_handler))
-        .nest_service("/", tower_http::services::ServeDir::new("web"))
+        .nest_service("/", ServeDir::new("web"))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -229,7 +256,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// against `git rev-parse HEAD` in the source repo. Mismatch => the runtime
 /// is NOT the artifact you think it is (source truth != runtime truth).
 async fn health() -> impl IntoResponse {
-    let mut h = serde_json::json!({"status": "ok"});
+    let mut h = serde_json::json!({"status": "ok", "contract_version": CONTRACT_VERSION});
     let prov = indy_reads::provenance::report();
     for (k, v) in prov.as_object().unwrap() {
         h[k] = v.clone();
@@ -281,7 +308,10 @@ async fn alebex_session(State(state): State<Arc<AppState>>) -> impl IntoResponse
         Ok(info) => Json(serde_json::to_value(info).unwrap()).into_response(),
         Err(e) => {
             let (code, msg) = match e {
-                AlebexError::Auth(m) => (StatusCode::SERVICE_UNAVAILABLE, format!("not configured: {}", m)),
+                AlebexError::Auth(m) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("not configured: {}", m),
+                ),
                 AlebexError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
                 AlebexError::Retryable(m) => (StatusCode::TOO_MANY_REQUESTS, m),
                 AlebexError::Transport(m) => (StatusCode::BAD_GATEWAY, m),
@@ -348,7 +378,7 @@ async fn browser_loop(state: Arc<AppState>, id: String, socket: WebSocket) {
                                 let _ = handle.engine_tx.send(EngineOut::Binary(b.to_vec()));
                             } else {
                                 mic_dropped += 1;
-                                if mic_dropped == 1 || mic_dropped % 500 == 0 {
+                                if mic_dropped == 1 || mic_dropped.is_multiple_of(500) {
                                     tracing::warn!(dropped = mic_dropped, session = %id, "mic flood: frames dropped");
                                 }
                             }
@@ -379,14 +409,14 @@ async fn browser_loop(state: Arc<AppState>, id: String, socket: WebSocket) {
             out = brx.recv() => {
                 match out {
                     Some(BrowserOut::Text(t)) => {
-                        if sink.send(axum::extract::ws::Message::Text(t.into())).await.is_err() { break; }
+                        if sink.send(axum::extract::ws::Message::Text(t)).await.is_err() { break; }
                     }
                     Some(BrowserOut::Binary(b)) => {
-                        if sink.send(axum::extract::ws::Message::Binary(b.into())).await.is_err() { break; }
+                        if sink.send(axum::extract::ws::Message::Binary(b)).await.is_err() { break; }
                     }
                     Some(BrowserOut::ClearAudio) => {
                         let _ = sink.send(axum::extract::ws::Message::Text(
-                            serde_json::json!({"type": "clear_audio"}).to_string().into(),
+                            serde_json::json!({"type": "clear_audio"}).to_string(),
                         )).await;
                     }
                     Some(BrowserOut::Close) | None => break,
@@ -439,9 +469,10 @@ fn parse_name_enrollment(utterance: &str) -> Option<String> {
             let sane = !words.is_empty()
                 && words.len() <= 3
                 && rest.len() <= 40
-                && words
-                    .iter()
-                    .all(|w| w.chars().all(|c| c.is_alphabetic() || c == '-' || c == '\'' || c == '.'));
+                && words.iter().all(|w| {
+                    w.chars()
+                        .all(|c| c.is_alphabetic() || c == '-' || c == '\'' || c == '.')
+                });
             if sane {
                 let start = lower.find(prefix).unwrap() + prefix.len();
                 let name = trimmed[start..]
@@ -459,7 +490,9 @@ fn parse_name_enrollment(utterance: &str) -> Option<String> {
 /// Values are filed, never echoed, never sent to a model.
 fn extract_email(utterance: &str) -> Option<String> {
     utterance.split_whitespace().find_map(|tok| {
-        let t = tok.trim_matches(|c: char| c.is_ascii_punctuation() && c != '@' && c != '.' && c != '_' && c != '-');
+        let t = tok.trim_matches(|c: char| {
+            c.is_ascii_punctuation() && c != '@' && c != '.' && c != '_' && c != '-'
+        });
         let at = t.find('@')?;
         let (local, domain) = t.split_at(at);
         let domain = &domain[1..];
@@ -533,7 +566,11 @@ async fn turn(
         let store = state.store.lock().unwrap();
         let _ = store.ensure_speaker(speakers::USER_ID, speakers::USER_LABEL, "user", t0);
         enrolled_name.is_none()
-            && store.speaker_name(speakers::USER_ID).ok().flatten().is_none()
+            && store
+                .speaker_name(speakers::USER_ID)
+                .ok()
+                .flatten()
+                .is_none()
             && store
                 .count_speaker_turns(&session_id, speakers::USER_ID)
                 .unwrap_or(1)
@@ -675,32 +712,70 @@ async fn turn(
             format!("{:?}", intent)
         };
         let user_seg = state.diarizer.diarize_turn(
-            speakers::USER_ID, speakers::USER_LABEL, &utterance, t0, t_gov_done);
+            speakers::USER_ID,
+            speakers::USER_LABEL,
+            &utterance,
+            t0,
+            t_gov_done,
+        );
         let _ = store.record_turn(
-            &format!("{}-u", request_id), &session_id,
-            &user_seg.speaker_id, user_seg.started_at_ms, user_seg.ended_at_ms,
-            &user_seg.text, &intent_s, Some(&epistemic),
-            Some(&decision.claim_id), Some(&decision.receipt.receipt_id),
-            t_gov_done.saturating_sub(t0), &governed.provider,
+            &format!("{}-u", request_id),
+            &session_id,
+            &user_seg.speaker_id,
+            user_seg.started_at_ms,
+            user_seg.ended_at_ms,
+            &user_seg.text,
+            &intent_s,
+            Some(&epistemic),
+            Some(&decision.claim_id),
+            Some(&decision.receipt.receipt_id),
+            t_gov_done.saturating_sub(t0),
+            &governed.provider,
         );
         let indy_seg = state.diarizer.diarize_turn(
-            speakers::INDY_ID, speakers::INDY_LABEL, &reply, t_gov_done, latency_ms.saturating_add(t0));
+            speakers::INDY_ID,
+            speakers::INDY_LABEL,
+            &reply,
+            t_gov_done,
+            latency_ms.saturating_add(t0),
+        );
         let _ = store.record_turn(
-            &format!("{}-a", request_id), &session_id,
-            &indy_seg.speaker_id, indy_seg.started_at_ms, indy_seg.ended_at_ms,
-            &indy_seg.text, "Respond", Some(&epistemic),
-            Some(&decision.claim_id), Some(&decision.receipt.receipt_id),
-            latency_ms, &governed.provider,
+            &format!("{}-a", request_id),
+            &session_id,
+            &indy_seg.speaker_id,
+            indy_seg.started_at_ms,
+            indy_seg.ended_at_ms,
+            &indy_seg.text,
+            "Respond",
+            Some(&epistemic),
+            Some(&decision.claim_id),
+            Some(&decision.receipt.receipt_id),
+            latency_ms,
+            &governed.provider,
         );
         let _ = store.upsert_claim(
-            &decision.claim_id, &session_id, &decision.claim_text,
-            &epistemic, "user", t_gov_done);
+            &decision.claim_id,
+            &session_id,
+            &decision.claim_text,
+            &epistemic,
+            "user",
+            t_gov_done,
+        );
         let r = &decision.receipt;
         let _ = store.record_receipt(
-            &r.receipt_id, &r.request_id, &session_id, r.timestamp_ms,
-            &r.actor, &r.operation, &r.input_hash, &r.decision,
-            r.epistemic_status.as_deref(), &r.output_hash,
-            r.duration_ms, r.success, &r.prev_hash,
+            &r.receipt_id,
+            &r.request_id,
+            &session_id,
+            r.timestamp_ms,
+            &r.actor,
+            &r.operation,
+            &r.input_hash,
+            &r.decision,
+            r.epistemic_status.as_deref(),
+            &r.output_hash,
+            r.duration_ms,
+            r.success,
+            &r.prev_hash,
         );
     }
 
@@ -717,8 +792,8 @@ async fn turn(
     // Avatar + voice: derived from the SAME governor event, never from the
     // LLM. Face and voice can never disagree about how Indy feels.
     let avatar_state = derive_avatar(decision.epistemic_status, intent, true);
-    let era = ScullyEra::from_str(req.era.as_deref().unwrap_or("prime"));
-    let tone = Tone::from_str(req.tone.as_deref().unwrap_or("dry"));
+    let era = ScullyEra::parse_label(req.era.as_deref().unwrap_or("prime"));
+    let tone = Tone::parse_label(req.tone.as_deref().unwrap_or("dry"));
     let voice_state = derive_voice_full(
         decision.epistemic_status,
         intent,
@@ -749,44 +824,39 @@ async fn turn(
             .and_then(|c| c.consent.as_deref())
             .or(env_consent.as_deref()),
     );
-    let (clone_status, clone_audio): (String, Option<CloneAudioView>) =
-        match &clone_decision {
-            CloneDecision::Off => ("off".to_string(), None),
-            CloneDecision::Refused(e) => {
-                tracing::warn!("voice clone refused: {e}");
+    let (clone_status, clone_audio): (String, Option<CloneAudioView>) = match &clone_decision {
+        CloneDecision::Off => ("off".to_string(), None),
+        CloneDecision::Refused(e) => {
+            tracing::warn!("voice clone refused: {e}");
+            ("refused".to_string(), None)
+        }
+        CloneDecision::Ready(plan) => match attempt_clone(
+            &*state.clone_engine,
+            plan,
+            &reply,
+            voice_state.voice_id,
+            &voice_state,
+        ) {
+            Ok(audio) => {
+                let bytes: Vec<u8> = audio.pcm16.iter().flat_map(|s| s.to_le_bytes()).collect();
+                let view = CloneAudioView {
+                    backend: format!("{:?}", audio.backend).to_lowercase(),
+                    sample_rate: audio.sample_rate,
+                    samples: audio.pcm16.len(),
+                    pcm16_base64: base64_encode(&bytes),
+                };
+                ("synthesized".to_string(), Some(view))
+            }
+            Err(CloneError::ConsentMissing) => {
+                tracing::warn!("voice clone refused at gate: consent missing");
                 ("refused".to_string(), None)
             }
-            CloneDecision::Ready(plan) => match attempt_clone(
-                &*state.clone_engine,
-                plan,
-                &reply,
-                voice_state.voice_id,
-                &voice_state,
-            ) {
-                Ok(audio) => {
-                    let bytes: Vec<u8> = audio
-                        .pcm16
-                        .iter()
-                        .flat_map(|s| s.to_le_bytes())
-                        .collect();
-                    let view = CloneAudioView {
-                        backend: format!("{:?}", audio.backend).to_lowercase(),
-                        sample_rate: audio.sample_rate,
-                        samples: audio.pcm16.len(),
-                        pcm16_base64: base64_encode(&bytes),
-                    };
-                    ("synthesized".to_string(), Some(view))
-                }
-                Err(CloneError::ConsentMissing) => {
-                    tracing::warn!("voice clone refused at gate: consent missing");
-                    ("refused".to_string(), None)
-                }
-                Err(e) => {
-                    tracing::info!("voice clone fallback to prosody: {e}");
-                    ("fallback".to_string(), None)
-                }
-            },
-        };
+            Err(e) => {
+                tracing::info!("voice clone fallback to prosody: {e}");
+                ("fallback".to_string(), None)
+            }
+        },
+    };
     // The receipt is honest about what the user heard.
     // Static lookup: the id space is finite (3 era bases), so no per-turn allocation.
     fn clone_voice_id(base: &'static str) -> &'static str {
@@ -861,12 +931,9 @@ async fn turn(
                 }));
             }
         }
-        let contradicted = evidence.iter().any(|e| {
-            matches!(
-                e.status,
-                indy_reads::domain::EvidenceStatus::Contradicted
-            )
-        });
+        let contradicted = evidence
+            .iter()
+            .any(|e| matches!(e.status, indy_reads::domain::EvidenceStatus::Contradicted));
         if contradicted {
             let challenged = matches!(
                 intent,
@@ -979,10 +1046,7 @@ fn demo_evidence(utterance: &str) -> Vec<Evidence> {
     }
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_ws(socket, state))
 }
 
@@ -995,16 +1059,12 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
             last_count = receipts.len();
             let new: Vec<&Receipt> = receipts.iter().take(5).collect();
             let msg = serde_json::json!({"type": "receipts", "receipts": new});
-            if socket
-                .send(Message::Text(msg.to_string().into()))
-                .await
-                .is_err()
-            {
+            if socket.send(Message::Text(msg.to_string())).await.is_err() {
                 break;
             }
         }
         // Ping-pong to keep alive; break on close.
-        if socket.send(Message::Ping(vec![].into())).await.is_err() {
+        if socket.send(Message::Ping(vec![])).await.is_err() {
             break;
         }
     }
@@ -1079,6 +1139,15 @@ async fn mcp_call(
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_contract_version_surfaced() {
+        // The contract version must exist, be non-empty, and be the same
+        // value the release bundle records. If this breaks, the release
+        // artifact is lying about the contract it ships.
+        assert!(!CONTRACT_VERSION.is_empty());
+        assert_eq!(CONTRACT_VERSION, "1");
+    }
+
     fn dispatch(tool: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
         let st = StdMutex::new(mcp::McpState::new());
         mcp_rest_dispatch(&st, tool, body)
@@ -1086,7 +1155,10 @@ mod tests {
 
     #[test]
     fn test_rest_claim_create_roundtrip() {
-        let (code, body) = dispatch("claim.create", serde_json::json!({"text": "the lake is deep"}));
+        let (code, body) = dispatch(
+            "claim.create",
+            serde_json::json!({"text": "the lake is deep"}),
+        );
         assert_eq!(code, StatusCode::OK);
         assert_eq!(body["epistemic_state"], "UNKNOWN");
         assert!(body["claim_id"].is_string());
@@ -1110,7 +1182,10 @@ mod tests {
     fn test_rest_unknown_tool_is_404() {
         let (code, body) = dispatch("claim.destroy", serde_json::json!({}));
         assert_eq!(code, StatusCode::NOT_FOUND);
-        assert!(body["error"].as_str().unwrap_or("").contains("unknown tool"));
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("unknown tool"));
     }
 
     #[test]
@@ -1121,10 +1196,7 @@ mod tests {
 
     #[test]
     fn test_rest_arguments_wrapper_accepted() {
-        let (code, body) = dispatch(
-            "system.health",
-            serde_json::json!({"arguments": {}}),
-        );
+        let (code, body) = dispatch("system.health", serde_json::json!({"arguments": {}}));
         assert_eq!(code, StatusCode::OK);
         assert_eq!(body["status"], "ok");
     }
@@ -1132,7 +1204,11 @@ mod tests {
     #[test]
     fn test_rest_evaluate_proven_path() {
         let st = StdMutex::new(mcp::McpState::new());
-        let (_, b) = mcp_rest_dispatch(&st, "claim.create", serde_json::json!({"text": "a large animal was observed"}));
+        let (_, b) = mcp_rest_dispatch(
+            &st,
+            "claim.create",
+            serde_json::json!({"text": "a large animal was observed"}),
+        );
         let cid = b["claim_id"].as_str().unwrap().to_string();
         for i in 0..2 {
             let (_, eb) = mcp_rest_dispatch(
@@ -1147,7 +1223,8 @@ mod tests {
                 serde_json::json!({"evidence_id": eid, "verdict": "verified", "basis": "lab"}),
             );
         }
-        let (code, ev) = mcp_rest_dispatch(&st, "claim.evaluate", serde_json::json!({"claim_id": cid}));
+        let (code, ev) =
+            mcp_rest_dispatch(&st, "claim.evaluate", serde_json::json!({"claim_id": cid}));
         assert_eq!(code, StatusCode::OK);
         assert_eq!(ev["new_state"], "PROVEN");
         // shared state: receipts visible via receipt.list
@@ -1160,7 +1237,11 @@ mod tests {
         let mut last = 0u64;
         // 100 immediate frames: all allowed (burst)
         for i in 0..100 {
-            assert!(mic_bucket_allow(&mut bucket, &mut last, i), "burst frame {} dropped", i);
+            assert!(
+                mic_bucket_allow(&mut bucket, &mut last, i),
+                "burst frame {} dropped",
+                i
+            );
         }
         // 101st with no time elapsed: dropped
         assert!(!mic_bucket_allow(&mut bucket, &mut last, 100));
@@ -1170,8 +1251,11 @@ mod tests {
         let mut b2 = 100u32;
         let mut l2 = 0u64;
         for i in 0..1000 {
-            assert!(mic_bucket_allow(&mut b2, &mut l2, i * 20), "nominal 50/s dropped at {}", i);
+            assert!(
+                mic_bucket_allow(&mut b2, &mut l2, i * 20),
+                "nominal 50/s dropped at {}",
+                i
+            );
         }
     }
 }
-

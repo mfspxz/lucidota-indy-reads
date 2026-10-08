@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS hypotheses (
 CREATE INDEX IF NOT EXISTS idx_evidence_claim ON evidence(claim_id);
 "#;
 
+/// One diarization row: (speaker_name_or_label, text, started_at_ms, ended_at_ms, intent).
+pub type TranscriptRow = (String, String, i64, i64, String);
+
 pub struct Store {
     conn: Connection,
 }
@@ -167,6 +170,9 @@ impl Store {
         Ok(())
     }
 
+    // Signatures mirror the SQL INSERT column lists 1:1 by design: grouping
+    // the arguments would obscure the schema mapping at each call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_receipt(
         &self,
         receipt_id: &str,
@@ -196,6 +202,8 @@ impl Store {
         Ok(())
     }
 
+    // See record_receipt: mirrors the SQL INSERT column list 1:1.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_evidence(
         &self,
         id: &str,
@@ -212,7 +220,17 @@ impl Store {
             "INSERT OR IGNORE INTO evidence
              (id, claim_id, session_id, text, kind, status, source, fixture, created_at_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![id, claim_id, session_id, text, kind, status, source, fixture as i64, now_ms as i64],
+            params![
+                id,
+                claim_id,
+                session_id,
+                text,
+                kind,
+                status,
+                source,
+                fixture as i64,
+                now_ms as i64
+            ],
         )?;
         Ok(())
     }
@@ -246,18 +264,16 @@ impl Store {
 
     /// Continuity lookup: has this exact claim been assessed before?
     pub fn find_claim_by_text(&self, text: &str) -> Result<Option<(String, String, i64)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, epistemic_state, updated_at_ms FROM claims WHERE text = ?1",
-        )?;
-        let mut rows = stmt.query_map(params![text], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?;
-        Ok(rows.next().transpose()?)
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, epistemic_state, updated_at_ms FROM claims WHERE text = ?1")?;
+        let mut rows = stmt.query_map(params![text], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.next().transpose()
     }
 
     /// Diarization view: every speaker turn in a session, time-ordered.
     /// Speaker column shows the enrolled name when one exists, else the raw label.
-    pub fn transcript(&self, session_id: &str) -> Result<Vec<(String, String, i64, i64, String)>> {
+    pub fn transcript(&self, session_id: &str) -> Result<Vec<TranscriptRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT COALESCE(NULLIF(s.name,''), s.label), t.text, t.started_at_ms, t.ended_at_ms, t.intent
              FROM turns t JOIN speakers s ON s.id = t.speaker_id
@@ -280,14 +296,22 @@ impl Store {
     }
 
     pub fn speaker_name(&self, id: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT name FROM speakers WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name FROM speakers WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], |r| r.get::<_, Option<String>>(0))?;
         Ok(rows.next().transpose()?.flatten())
     }
 
     /// Volunteered PII / attributes, keyed per speaker. Stored locally only,
     /// never sent to a model or a remote service.
-    pub fn set_speaker_attribute(&self, id: &str, key: &str, value: &str, now_ms: u64) -> Result<()> {
+    pub fn set_speaker_attribute(
+        &self,
+        id: &str,
+        key: &str,
+        value: &str,
+        now_ms: u64,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO speaker_attributes (speaker_id, key, value, updated_at_ms)
              VALUES (?1, ?2, ?3, ?4)
@@ -314,7 +338,8 @@ impl Store {
     }
 
     pub fn count_turns(&self) -> Result<i64> {
-        self.conn.query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))
+        self.conn
+            .query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))
     }
 }
 
@@ -325,13 +350,40 @@ mod tests {
     #[test]
     fn test_schema_and_diarized_transcript() {
         let s = Store::open(":memory:").unwrap();
-        s.ensure_speaker("spk0", "SPEAKER_00", "user", 1000).unwrap();
+        s.ensure_speaker("spk0", "SPEAKER_00", "user", 1000)
+            .unwrap();
         s.ensure_speaker("indy", "INDY", "agent", 1000).unwrap();
         s.create_session("sess1", 1000).unwrap();
-        s.record_turn("t1", "sess1", "spk0", 1000, 2500, "is it real?", "Question",
-            Some("UNKNOWN"), None, Some("r1"), 60, "fixture").unwrap();
-        s.record_turn("t2", "sess1", "indy", 2500, 3100, "Unknown.", "Converse",
-            Some("UNKNOWN"), None, Some("r2"), 40, "fixture").unwrap();
+        s.record_turn(
+            "t1",
+            "sess1",
+            "spk0",
+            1000,
+            2500,
+            "is it real?",
+            "Question",
+            Some("UNKNOWN"),
+            None,
+            Some("r1"),
+            60,
+            "fixture",
+        )
+        .unwrap();
+        s.record_turn(
+            "t2",
+            "sess1",
+            "indy",
+            2500,
+            3100,
+            "Unknown.",
+            "Converse",
+            Some("UNKNOWN"),
+            None,
+            Some("r2"),
+            40,
+            "fixture",
+        )
+        .unwrap();
         let tx = s.transcript("sess1").unwrap();
         assert_eq!(tx.len(), 2);
         assert_eq!(tx[0].0, "SPEAKER_00");
@@ -343,18 +395,34 @@ mod tests {
     #[test]
     fn test_speaker_name_enrollment_and_attributes() {
         let s = Store::open(":memory:").unwrap();
-        s.ensure_speaker("spk0", "SPEAKER_00", "user", 1000).unwrap();
+        s.ensure_speaker("spk0", "SPEAKER_00", "user", 1000)
+            .unwrap();
         assert_eq!(s.speaker_name("spk0").unwrap(), None);
         s.set_speaker_name("spk0", "Zack").unwrap();
         assert_eq!(s.speaker_name("spk0").unwrap(), Some("Zack".to_string()));
-        s.set_speaker_attribute("spk0", "email", "z@example.com", 2000).unwrap();
-        s.set_speaker_attribute("spk0", "phone", "555-0100", 2000).unwrap();
+        s.set_speaker_attribute("spk0", "email", "z@example.com", 2000)
+            .unwrap();
+        s.set_speaker_attribute("spk0", "phone", "555-0100", 2000)
+            .unwrap();
         let attrs = s.speaker_attributes("spk0").unwrap();
         assert_eq!(attrs.len(), 2);
         // Transcript shows the enrolled name, not the raw label.
         s.create_session("sess1", 1000).unwrap();
-        s.record_turn("t1", "sess1", "spk0", 1000, 2500, "hi", "NameEnrollment",
-            Some("UNKNOWN"), None, Some("r1"), 60, "fixture").unwrap();
+        s.record_turn(
+            "t1",
+            "sess1",
+            "spk0",
+            1000,
+            2500,
+            "hi",
+            "NameEnrollment",
+            Some("UNKNOWN"),
+            None,
+            Some("r1"),
+            60,
+            "fixture",
+        )
+        .unwrap();
         let tx = s.transcript("sess1").unwrap();
         assert_eq!(tx[0].0, "Zack");
         assert_eq!(s.count_speaker_turns("sess1", "spk0").unwrap(), 1);

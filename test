@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ./test — one-command local CI, gate 1: format, lint, compile, unit/
+# integration/contract tests. No remote CI (GitHub OAuth parked).
+# Exit 0 = all green. Exit != 0 = something failed; output says what.
+set -euo pipefail
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+cd "$(dirname "$0")"
+
+echo "==> [1/3] cargo fmt --check"
+cargo fmt --all -- --check
+echo "    fmt: clean"
+
+echo "==> [2/3] cargo clippy --all-targets -D warnings"
+cargo clippy --all-targets -- -D warnings
+echo "    clippy: clean"
+
+echo "==> [3/3] cargo test"
+cargo test --all
+echo "    tests: green"
+
+echo "TEST: GREEN"

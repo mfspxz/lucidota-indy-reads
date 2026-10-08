@@ -144,11 +144,17 @@ pub struct TernlightProvider {
 
 impl TernlightProvider {
     pub fn base() -> Self {
-        Self { tier: "base".into(), wasm_loaded: false }
+        Self {
+            tier: "base".into(),
+            wasm_loaded: false,
+        }
     }
 
     pub fn mini() -> Self {
-        Self { tier: "mini".into(), wasm_loaded: false }
+        Self {
+            tier: "mini".into(),
+            wasm_loaded: false,
+        }
     }
 
     /// Call once the WASM artifact (or native adapter) is vendored.

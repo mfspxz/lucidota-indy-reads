@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# ./rollback-test — E5 drill, local target only. Exercises the full loop:
+#   deploy → detect → identify → rollback → verify
+# against deploy-local/ (never a remote host).
+#
+# The drill: deploy a good release, then simulate a failed deploy
+# (corrupted bundle — binary missing, the classic partial-deploy failure),
+# detect it via health, identify it via the manifest, roll back to the
+# previous release, and verify the restored service.
+set -euo pipefail
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+cd "$(dirname "$0")"
+
+ROOT="$PWD/deploy-local"
+REL="$ROOT/releases"
+PORT="${INDY_ROLLBACK_PORT:-18081}"
+mkdir -p "$REL"
+
+[ -d "$1" ] 2>/dev/null || { echo "usage: ./rollback-test <release-bundle-dir>"; exit 2; }
+BUNDLE="$(cd "$1" && pwd)"
+BNAME="$(basename "$BUNDLE")"
+
+echo "==> DEPLOY $BNAME (good release)"
+GOOD="$REL/$BNAME"
+rm -rf "$GOOD"; cp -r "$BUNDLE" "$GOOD"
+(cd "$GOOD" && sha256sum -c CHECKSUMS.sha256 >/dev/null) || { echo "DRILL: FAILED — bundle checksums bad on ingest"; exit 1; }
+ln -sfn "$GOOD" "$ROOT/current"
+echo "$BNAME" > "$ROOT/manifest"
+echo "    deployed: $GOOD"
+
+echo "==> run + health (expect green)"
+PORT="$PORT" nohup "$ROOT/current/bin/indy-reads" >/tmp/indy-rb-good.log 2>&1 &
+SRV=$!; sleep 2
+H1="$(curl -sf "http://127.0.0.1:$PORT/health" || true)"
+[ -n "$H1" ] || { kill $SRV 2>/dev/null; echo "DRILL: FAILED — good release unhealthy"; exit 1; }
+C1="$(printf '%s' "$H1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')"
+echo "    healthy, commit $C1"
+
+echo "==> DEPLOY bad release (simulated partial deploy: binary missing)"
+BAD="$REL/bad-partial-deploy"
+rm -rf "$BAD"; mkdir -p "$BAD/bin"; cp "$GOOD/BUILD.json" "$BAD/" 2>/dev/null || true
+PREV="$(readlink "$ROOT/current")"
+kill $SRV 2>/dev/null || true; sleep 1
+ln -sfn "$BAD" "$ROOT/current"
+echo "bad-partial-deploy" > "$ROOT/manifest"
+PORT="$PORT" nohup "$ROOT/current/bin/indy-reads" >/tmp/indy-rb-bad.log 2>&1 &
+SRV=$! || true; sleep 2
+
+echo "==> DETECT (health must fail)"
+if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+  echo "DRILL: FAILED — bad deploy passed health, detector broken"; kill $SRV 2>/dev/null; exit 1
+fi
+echo "    DETECTED: /health unreachable for bad-partial-deploy"
+
+echo "==> IDENTIFY (manifest vs reality)"
+echo "    manifest says: $(cat "$ROOT/manifest")"
+echo "    binary present: $([ -x "$ROOT/current/bin/indy-reads" ] && echo yes || echo NO)"
+echo "    IDENTIFIED: failed deploy — binary missing (partial deploy)"
+
+echo "==> ROLLBACK to $PREV"
+kill $SRV 2>/dev/null || true; sleep 1
+ln -sfn "$PREV" "$ROOT/current"
+echo "$BNAME" > "$ROOT/manifest"
+PORT="$PORT" nohup "$ROOT/current/bin/indy-reads" >/tmp/indy-rb-rb.log 2>&1 &
+SRV=$!; sleep 2
+
+echo "==> VERIFY (health + identity + receipts)"
+H2="$(curl -sf "http://127.0.0.1:$PORT/health")" \
+  || { echo "DRILL: FAILED — rolled-back service unhealthy"; kill $SRV 2>/dev/null; exit 1; }
+C2="$(printf '%s' "$H2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')"
+[ "$C2" = "$C1" ] || { echo "DRILL: FAILED — identity mismatch after rollback"; kill $SRV 2>/dev/null; exit 1; }
+curl -sf -X POST "http://127.0.0.1:$PORT/api/turn" -H 'Content-Type: application/json' \
+  -d '{"utterance":"rollback drill probe"}' >/dev/null \
+  || { echo "DRILL: FAILED — turn failed after rollback"; kill $SRV 2>/dev/null; exit 1; }
+curl -sf "http://127.0.0.1:$PORT/api/receipts" -o /tmp/indy-rb-receipts.json
+./target/debug/indy-verify /tmp/indy-rb-receipts.json >/dev/null \
+  || { echo "DRILL: FAILED — receipt chain broken after rollback"; kill $SRV 2>/dev/null; exit 1; }
+kill $SRV 2>/dev/null || true
+echo "    VERIFIED: health green, identity $C2, turn ok, receipt chain VERIFIED"
+echo "ROLLBACK DRILL: PASS — deploy → detect → identify → rollback → verify"

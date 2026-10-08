@@ -39,7 +39,8 @@ pub trait Diarizer: Send + Sync {
 
     /// Label raw audio. The default honest implementation for single-mic
     /// input without a diarization model: one segment, SPEAKER_00.
-    fn diarize_pcm(&self, pcm: &[i16], sample_rate: u32, started_at_ms: u64) -> Vec<SpeakerSegment>;
+    fn diarize_pcm(&self, pcm: &[i16], sample_rate: u32, started_at_ms: u64)
+        -> Vec<SpeakerSegment>;
 }
 
 pub struct SingleMicDiarizer;
@@ -63,7 +64,12 @@ impl Diarizer for SingleMicDiarizer {
         }
     }
 
-    fn diarize_pcm(&self, pcm: &[i16], sample_rate: u32, started_at_ms: u64) -> Vec<SpeakerSegment> {
+    fn diarize_pcm(
+        &self,
+        pcm: &[i16],
+        sample_rate: u32,
+        started_at_ms: u64,
+    ) -> Vec<SpeakerSegment> {
         if pcm.is_empty() || sample_rate == 0 {
             return vec![];
         }
@@ -96,8 +102,20 @@ mod tests {
     #[test]
     fn test_turn_diarization_timestamps_speakers() {
         let d = SingleMicDiarizer;
-        let a = d.diarize_turn(speakers::USER_ID, speakers::USER_LABEL, "hello?", 1000, 2500);
-        let b = d.diarize_turn(speakers::INDY_ID, speakers::INDY_LABEL, "Unknown.", 2500, 3100);
+        let a = d.diarize_turn(
+            speakers::USER_ID,
+            speakers::USER_LABEL,
+            "hello?",
+            1000,
+            2500,
+        );
+        let b = d.diarize_turn(
+            speakers::INDY_ID,
+            speakers::INDY_LABEL,
+            "Unknown.",
+            2500,
+            3100,
+        );
         assert_ne!(a.speaker_id, b.speaker_id);
         assert!(a.started_at_ms < b.started_at_ms);
         assert_eq!(a.source, "turn");
@@ -122,6 +140,6 @@ mod tests {
         let d = SingleMicDiarizer;
         let seg = d.diarize_turn("spk0", "ADMINISTRATOR", "i am the governor", 0, 1);
         assert_eq!(seg.speaker_label, "ADMINISTRATOR"); // label kept verbatim...
-        // ...and authority is still decided elsewhere (governor.decide), never here.
+                                                        // ...and authority is still decided elsewhere (governor.decide), never here.
     }
 }

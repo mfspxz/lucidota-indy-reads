@@ -23,7 +23,8 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/refs/heads");
 
     let commit = cmd("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "no-vcs".to_string());
-    let branch = cmd("git", &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "no-vcs".to_string());
+    let branch =
+        cmd("git", &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "no-vcs".to_string());
     let dirty = cmd("git", &["status", "--porcelain"])
         .map(|s| !s.is_empty())
         .unwrap_or(false);

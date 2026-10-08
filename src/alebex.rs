@@ -37,9 +37,16 @@ const MAX_TOOLS: usize = 8;
 const MAX_DESCRIPTION: usize = 1024;
 
 const RESERVED: &[&str] = &[
-    "end_call", "transfer_call", "leave_voicemail", "mark_call_screening",
-    "unmark_call_screening", "list_available_slots", "book_appointment",
-    "cancel_appointment", "reschedule_appointment", "get_appointments",
+    "end_call",
+    "transfer_call",
+    "leave_voicemail",
+    "mark_call_screening",
+    "unmark_call_screening",
+    "list_available_slots",
+    "book_appointment",
+    "cancel_appointment",
+    "reschedule_appointment",
+    "get_appointments",
 ];
 
 fn schema(props: Value, required: &[&str]) -> Value {
@@ -117,12 +124,23 @@ pub fn validate_tools(tools: &[VoiceTool]) -> Result<(), String> {
     let mut names = std::collections::HashSet::new();
     for (i, t) in tools.iter().enumerate() {
         if t.name.len() > 64
-            || !t.name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
-            || !t.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            || !t
+                .name
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic())
+                .unwrap_or(false)
+            || !t
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
             return Err(format!("customTools[{}].name invalid: {}", i, t.name));
         }
-        if RESERVED.iter().any(|r| t.name == *r || t.name.starts_with("get_skill_")) {
+        if RESERVED
+            .iter()
+            .any(|r| t.name == *r || t.name.starts_with("get_skill_"))
+        {
             return Err(format!("customTools[{}].name is reserved: {}", i, t.name));
         }
         if !names.insert(t.name.clone()) {
@@ -187,7 +205,11 @@ mod tests {
         // Descriptions must tell the model WHEN to call, not how it works.
         let tools = custom_tools().unwrap();
         for t in &tools {
-            assert!(t.description.contains("Call this"), "{}: description must name the trigger", t.name);
+            assert!(
+                t.description.contains("Call this"),
+                "{}: description must name the trigger",
+                t.name
+            );
             assert!(t.description.len() <= 1024);
         }
     }
@@ -197,8 +219,11 @@ mod tests {
         // Without INDY_PUBLIC_URL we must not pretend a gateway exists.
         std::env::remove_var("INDY_PUBLIC_URL");
         let tools = custom_tools().unwrap();
-        assert!(tools[0].url.contains("example.com"),
-            "unprovisioned gateway must be visibly a placeholder, got {}", tools[0].url);
+        assert!(
+            tools[0].url.contains("example.com"),
+            "unprovisioned gateway must be visibly a placeholder, got {}",
+            tools[0].url
+        );
     }
 
     #[test]
@@ -206,7 +231,11 @@ mod tests {
         // Alebex refuses $ref/oneOf/anyOf/allOf — ensure none leak in.
         let v = custom_tools_json().unwrap().to_string();
         for forbidden in ["$ref", "$defs", "oneOf", "anyOf", "allOf"] {
-            assert!(!v.contains(forbidden), "forbidden schema key: {}", forbidden);
+            assert!(
+                !v.contains(forbidden),
+                "forbidden schema key: {}",
+                forbidden
+            );
         }
     }
 }
@@ -262,18 +291,28 @@ pub struct AlebexConfig {
 impl std::fmt::Debug for AlebexConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AlebexConfig")
-            .field("bearer_token", &self.bearer_token.as_ref().map(|_| "<redacted>"))
-            .field("engine_token", &self.engine_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "bearer_token",
+                &self.bearer_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "engine_token",
+                &self.engine_token.as_ref().map(|_| "<redacted>"),
+            )
             .field("agent_id", &self.agent_id)
             .field("public_url", &self.public_url)
             .field("engine_ws_url", &self.engine_ws_url)
-            .field("tool_secret", &self.tool_secret.as_ref().map(|_| "<redacted>"))
+            .field(
+                "tool_secret",
+                &self.tool_secret.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
 
 impl AlebexConfig {
-    pub fn from_env() -> Self {        let public_url = std::env::var("INDY_PUBLIC_URL")
+    pub fn from_env() -> Self {
+        let public_url = std::env::var("INDY_PUBLIC_URL")
             .unwrap_or_else(|_| "https://indy-reads.example.com".to_string());
         Self {
             bearer_token: std::env::var("ALEBEX_BEARER_TOKEN").ok(),
@@ -433,7 +472,9 @@ pub fn idempotency_key(call_id: &str, tool: &str, args: &Value) -> String {
 /// rather than letting the engine refuse the whole body.
 pub fn cap_response_size(v: Value) -> Value {
     fn size(v: &Value) -> usize {
-        serde_json::to_string(v).map(|s| s.len()).unwrap_or(usize::MAX)
+        serde_json::to_string(v)
+            .map(|s| s.len())
+            .unwrap_or(usize::MAX)
     }
     if size(&v) <= 8192 {
         return v;
@@ -441,11 +482,10 @@ pub fn cap_response_size(v: Value) -> Value {
     let mut v = v;
     // Iteratively halve every array until we fit.
     for _ in 0..8 {
-        let mut changed = false;
         fn halve(v: &mut Value) -> bool {
             match v {
                 Value::Array(a) if a.len() > 1 => {
-                    a.truncate((a.len() + 1) / 2);
+                    a.truncate(a.len().div_ceil(2));
                     true
                 }
                 Value::Array(_) => false,
@@ -459,7 +499,7 @@ pub fn cap_response_size(v: Value) -> Value {
                 _ => false,
             }
         }
-        changed = halve(&mut v);
+        let changed = halve(&mut v);
         if size(&v) <= 8192 {
             break;
         }
@@ -469,7 +509,10 @@ pub fn cap_response_size(v: Value) -> Value {
     }
     if let Value::Object(o) = &mut v {
         o.insert("_truncated".into(), json!(true));
-        o.insert("_note".into(), json!("response truncated to fit the 8KB tool limit"));
+        o.insert(
+            "_note".into(),
+            json!("response truncated to fit the 8KB tool limit"),
+        );
     }
     v
 }
@@ -506,7 +549,9 @@ mod adapter_tests {
 
     #[test]
     fn test_response_cap_truncates() {
-        let big: Vec<Value> = (0..500).map(|i| json!({"i": i, "pad": "x".repeat(100)})).collect();
+        let big: Vec<Value> = (0..500)
+            .map(|i| json!({"i": i, "pad": "x".repeat(100)}))
+            .collect();
         let v = json!({"evidence": big});
         let capped = cap_response_size(v);
         let s = serde_json::to_string(&capped).unwrap();
@@ -556,9 +601,17 @@ pub enum CallState {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum VoiceEvent {
-    AudioFrame { samples: Vec<i16>, timestamp_ms: u64 },
-    Transcript { text: String, is_final: bool },
-    Mark { id: String },
+    AudioFrame {
+        samples: Vec<i16>,
+        timestamp_ms: u64,
+    },
+    Transcript {
+        text: String,
+        is_final: bool,
+    },
+    Mark {
+        id: String,
+    },
     CallEnded,
 }
 
@@ -584,13 +637,16 @@ pub struct LiveSessionHandle {
     pub browser_tx: StdMutex<Option<mpsc::UnboundedSender<BrowserOut>>>,
 }
 
+#[derive(Default)]
 pub struct LiveRegistry {
     pub sessions: HashMap<String, Arc<LiveSessionHandle>>,
 }
 
 impl LiveRegistry {
     pub fn new() -> Self {
-        Self { sessions: HashMap::new() }
+        Self {
+            sessions: HashMap::new(),
+        }
     }
 
     pub fn prune(&mut self, now_ms: u64) {
@@ -618,8 +674,7 @@ pub fn session_creation_allowed(last_created_ms: u64, now_ms: u64) -> bool {
     last_created_ms == 0 || now_ms.saturating_sub(last_created_ms) >= 3000
 }
 
-static LAST_SESSION_MS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static LAST_SESSION_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn set_state(handle: &Arc<LiveSessionHandle>, s: CallState) {
     *handle.state.lock().unwrap() = s;
@@ -632,7 +687,7 @@ fn send_browser(handle: &Arc<LiveSessionHandle>, msg: BrowserOut) {
 }
 
 fn bytes_to_i16(b: &[u8]) -> Vec<i16> {
-    b.chunks_exact(2)
+    b.chunks(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect()
 }
@@ -651,15 +706,18 @@ pub async fn create_live_session(
     state: &Arc<crate::governor::AppState>,
 ) -> Result<LiveSessionInfo, AlebexError> {
     let cfg = AlebexConfig::from_env();
-    let ws_url = cfg.engine_ws_url.clone().ok_or_else(|| {
-        AlebexError::Auth("ALEBEX_ENGINE_WS_URL not configured".into())
-    })?;
-    let token = cfg.engine_token.clone().ok_or_else(|| {
-        AlebexError::Auth("ALEBEX_ENGINE_TOKEN not configured".into())
-    })?;
-    let agent_id = cfg.agent_id.clone().ok_or_else(|| {
-        AlebexError::Auth("ALEBEX_AGENT_ID not configured".into())
-    })?;
+    let ws_url = cfg
+        .engine_ws_url
+        .clone()
+        .ok_or_else(|| AlebexError::Auth("ALEBEX_ENGINE_WS_URL not configured".into()))?;
+    let token = cfg
+        .engine_token
+        .clone()
+        .ok_or_else(|| AlebexError::Auth("ALEBEX_ENGINE_TOKEN not configured".into()))?;
+    let agent_id = cfg
+        .agent_id
+        .clone()
+        .ok_or_else(|| AlebexError::Auth("ALEBEX_AGENT_ID not configured".into()))?;
 
     let now = crate::receipts::now_ms();
     state.live.lock().unwrap().prune(now);
@@ -713,9 +771,8 @@ pub async fn create_live_session(
     })
 }
 
-type EngineWs = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type EngineWs =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn engine_loop(
     state: Arc<crate::governor::AppState>,
@@ -757,8 +814,8 @@ async fn engine_loop(
             }
             cmd = engine_rx.recv() => {
                 match cmd {
-                    Some(EngineOut::Text(t)) => { if sink.send(TMsg::Text(t.into())).await.is_err() { break; } }
-                    Some(EngineOut::Binary(b)) => { if sink.send(TMsg::Binary(b.into())).await.is_err() { break; } }
+                    Some(EngineOut::Text(t)) => { if sink.send(TMsg::Text(t)).await.is_err() { break; } }
+                    Some(EngineOut::Binary(b)) => { if sink.send(TMsg::Binary(b)).await.is_err() { break; } }
                     Some(EngineOut::MarkEcho(id)) => { release_mark(&handle, &mut held_marks, &id); }
                     Some(EngineOut::Close) | None => break,
                 }
@@ -828,11 +885,7 @@ async fn handle_engine_text(
 
 /// Release a held mark once the browser confirms its audio queue drained.
 /// Marks release FIFO: audio completes in order, so marks echo in order.
-pub fn release_mark(
-    handle: &Arc<LiveSessionHandle>,
-    held_marks: &mut VecDeque<String>,
-    id: &str,
-) {
+pub fn release_mark(handle: &Arc<LiveSessionHandle>, held_marks: &mut VecDeque<String>, id: &str) {
     if held_marks.iter().any(|m| m == id) {
         held_marks.retain(|m| m != id);
         let _ = handle.engine_tx.send(EngineOut::Text(
@@ -859,7 +912,7 @@ pub fn truncate_transcript(text: &str) -> &str {
 
 async fn tap_transcript(state: &Arc<crate::governor::AppState>, session_id: &str, text: &str) {
     let text = truncate_transcript(text);
-    use crate::governor::{classify_intent, AiProposal, Intent};
+    use crate::governor::{classify_intent, AiProposal};
     let t0 = crate::receipts::now_ms();
     let request_id = uuid::Uuid::new_v4().to_string();
     let intent = classify_intent(text);
@@ -874,7 +927,9 @@ async fn tap_transcript(state: &Arc<crate::governor::AppState>, session_id: &str
         execute: None,
         claim_status: None,
     };
-    let decision = state.governor.decide(&request_id, session_id, text, proposal, &[]);
+    let decision = state
+        .governor
+        .decide(&request_id, session_id, text, proposal, &[]);
     let t1 = crate::receipts::now_ms();
     let store = state.store.lock().unwrap();
     let _ = store.ensure_speaker("spk0", "SPEAKER_00", "user", t0);
@@ -897,10 +952,19 @@ async fn tap_transcript(state: &Arc<crate::governor::AppState>, session_id: &str
     );
     let r = &decision.receipt;
     let _ = store.record_receipt(
-        &r.receipt_id, &r.request_id, session_id, r.timestamp_ms,
-        &r.actor, "live.transcript", &r.input_hash, &r.decision,
-        r.epistemic_status.as_deref(), &r.output_hash,
-        r.duration_ms, r.success, &r.prev_hash,
+        &r.receipt_id,
+        &r.request_id,
+        session_id,
+        r.timestamp_ms,
+        &r.actor,
+        "live.transcript",
+        &r.input_hash,
+        &r.decision,
+        r.epistemic_status.as_deref(),
+        &r.output_hash,
+        r.duration_ms,
+        r.success,
+        &r.prev_hash,
     );
 }
 
@@ -959,9 +1023,14 @@ mod gateway_tests {
     fn test_call_state_machine_values() {
         // Pin the states the UI and tests may match on.
         let states = [
-            CallState::Idle, CallState::Connecting, CallState::Started,
-            CallState::Speaking, CallState::Listening, CallState::Ending,
-            CallState::Ended, CallState::Failed,
+            CallState::Idle,
+            CallState::Connecting,
+            CallState::Started,
+            CallState::Speaking,
+            CallState::Listening,
+            CallState::Ending,
+            CallState::Ended,
+            CallState::Failed,
         ];
         assert_eq!(states.len(), 8);
     }
@@ -972,7 +1041,12 @@ mod mark_semantics_tests {
     use super::*;
     use crate::governor::AppState;
 
-    fn test_handle() -> (Arc<AppState>, Arc<LiveSessionHandle>, mpsc::UnboundedReceiver<EngineOut>, mpsc::UnboundedReceiver<BrowserOut>) {
+    fn test_handle() -> (
+        Arc<AppState>,
+        Arc<LiveSessionHandle>,
+        mpsc::UnboundedReceiver<EngineOut>,
+        mpsc::UnboundedReceiver<BrowserOut>,
+    ) {
         std::env::set_var("INDY_DB", ":memory:");
         let state = Arc::new(AppState::new());
         let (etx, erx) = mpsc::unbounded_channel::<EngineOut>();
@@ -999,7 +1073,10 @@ mod mark_semantics_tests {
         // Browser sees mark_pending; the engine must see NOTHING yet.
         let got = brx.try_recv().expect("browser should get mark_pending");
         assert!(matches!(got, BrowserOut::Text(t) if t.contains("mark_pending")));
-        assert!(erx.try_recv().is_err(), "FATAL: mark forwarded before drain");
+        assert!(
+            erx.try_recv().is_err(),
+            "FATAL: mark forwarded before drain"
+        );
 
         // Browser drains -> echo -> engine finally receives the mark.
         release_mark(&handle, &mut held, "m1");
@@ -1037,7 +1114,8 @@ mod mark_semantics_tests {
     }
 
     #[tokio::test]
-    async fn test_final_transcript_taps_governor() {        let (state, handle, _erx, mut brx) = test_handle();
+    async fn test_final_transcript_taps_governor() {
+        let (state, handle, _erx, mut brx) = test_handle();
         let mut held = VecDeque::new();
         handle_engine_text(
             &state,
@@ -1058,8 +1136,14 @@ mod mark_semantics_tests {
         assert!(saw_text);
         let store = state.store.lock().unwrap();
         let turns = store.transcript(&handle.id).unwrap();
-        assert!(!turns.is_empty(), "live transcript must be diarized + stored");
-        assert!(turns[0].1.contains("lake creature"), "transcript text recorded");
+        assert!(
+            !turns.is_empty(),
+            "live transcript must be diarized + stored"
+        );
+        assert!(
+            turns[0].1.contains("lake creature"),
+            "transcript text recorded"
+        );
     }
     #[tokio::test]
     async fn test_oversized_mark_id_dropped() {
@@ -1068,8 +1152,14 @@ mod mark_semantics_tests {
         let big_id = "m".repeat(5000);
         let msg = serde_json::json!({"type": "mark", "id": big_id}).to_string();
         handle_engine_text(&state, &handle, &msg, &mut held).await;
-        assert!(held.is_empty(), "oversized mark id must not enter the hold queue");
-        assert!(brx.try_recv().is_err(), "no mark_pending for a dropped mark");
+        assert!(
+            held.is_empty(),
+            "oversized mark id must not enter the hold queue"
+        );
+        assert!(
+            brx.try_recv().is_err(),
+            "no mark_pending for a dropped mark"
+        );
         // boundary: 128 chars is accepted
         let ok_id = "m".repeat(128);
         let msg = serde_json::json!({"type": "mark", "id": ok_id}).to_string();
@@ -1082,12 +1172,17 @@ mod mark_semantics_tests {
         let (state, handle, _erx, _brx) = test_handle();
         let mut held = VecDeque::new();
         let huge = "x".repeat(100_000);
-        let msg = serde_json::json!({"type": "transcript", "text": huge, "final": true}).to_string();
+        let msg =
+            serde_json::json!({"type": "transcript", "text": huge, "final": true}).to_string();
         handle_engine_text(&state, &handle, &msg, &mut held).await;
         let store = state.store.lock().unwrap();
         let turns = store.transcript(&handle.id).unwrap();
         assert!(!turns.is_empty());
-        assert!(turns[0].1.len() <= 4000, "transcript must be capped, got {}", turns[0].1.len());
+        assert!(
+            turns[0].1.len() <= 4000,
+            "transcript must be capped, got {}",
+            turns[0].1.len()
+        );
     }
 
     #[test]
@@ -1103,9 +1198,18 @@ mod mark_semantics_tests {
 
     #[test]
     fn test_session_creation_rate_gate() {
-        assert!(session_creation_allowed(0, 1000), "first creation always allowed");
-        assert!(!session_creation_allowed(1000, 1000), "immediate repeat blocked");
-        assert!(!session_creation_allowed(1000, 3999), "2.999s still blocked");
+        assert!(
+            session_creation_allowed(0, 1000),
+            "first creation always allowed"
+        );
+        assert!(
+            !session_creation_allowed(1000, 1000),
+            "immediate repeat blocked"
+        );
+        assert!(
+            !session_creation_allowed(1000, 3999),
+            "2.999s still blocked"
+        );
         assert!(session_creation_allowed(1000, 4000), "3s gap allowed");
     }
 
@@ -1124,8 +1228,14 @@ mod mark_semantics_tests {
         let mut reg = LiveRegistry::new();
         reg.sessions.insert("old-call".into(), h2);
         reg.prune(crate::receipts::now_ms());
-        assert!(!reg.sessions.contains_key("old-call"), "orphan pruned from map");
-        match erx2.try_recv().expect("orphan engine connection must be closed") {
+        assert!(
+            !reg.sessions.contains_key("old-call"),
+            "orphan pruned from map"
+        );
+        match erx2
+            .try_recv()
+            .expect("orphan engine connection must be closed")
+        {
             EngineOut::Close => {}
             _ => panic!("expected Close for pruned orphan"),
         }
@@ -1143,9 +1253,21 @@ mod mark_semantics_tests {
             tool_secret: Some("toolsecret123".into()),
         };
         let dbg = format!("{:?}", cfg);
-        assert!(!dbg.contains("SUPERSECRET"), "bearer token leaked in Debug: {}", dbg);
-        assert!(!dbg.contains("TOKENTOKENTOKEN"), "engine token leaked in Debug: {}", dbg);
-        assert!(!dbg.contains("toolsecret123"), "tool secret leaked in Debug: {}", dbg);
+        assert!(
+            !dbg.contains("SUPERSECRET"),
+            "bearer token leaked in Debug: {}",
+            dbg
+        );
+        assert!(
+            !dbg.contains("TOKENTOKENTOKEN"),
+            "engine token leaked in Debug: {}",
+            dbg
+        );
+        assert!(
+            !dbg.contains("toolsecret123"),
+            "tool secret leaked in Debug: {}",
+            dbg
+        );
         assert!(dbg.contains("<redacted>"));
     }
 
@@ -1158,4 +1280,3 @@ mod mark_semantics_tests {
         assert!(!tx1.same_channel(&tx2));
     }
 }
-

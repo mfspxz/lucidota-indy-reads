@@ -121,7 +121,7 @@ pub enum ScullyEra {
 }
 
 impl ScullyEra {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_label(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "rookie" | "young" | "1993" => ScullyEra::Rookie,
             "veteran" | "older" | "old" | "2024" => ScullyEra::Veteran,
@@ -154,7 +154,7 @@ pub enum Tone {
 }
 
 impl Tone {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_label(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "clinical" => Tone::Clinical,
             "warm" => Tone::Warm,
@@ -185,7 +185,14 @@ pub fn derive_voice(
     emotion: Emotion,
     persona: &str,
 ) -> VoiceState {
-    derive_voice_full(epistemic, intent, emotion, persona, ScullyEra::Prime, Tone::Dry)
+    derive_voice_full(
+        epistemic,
+        intent,
+        emotion,
+        persona,
+        ScullyEra::Prime,
+        Tone::Dry,
+    )
 }
 
 pub fn derive_voice_full(
@@ -328,9 +335,18 @@ mod era_tests {
         let r = v(ScullyEra::Rookie, Tone::Dry);
         let p = v(ScullyEra::Prime, Tone::Dry);
         let o = v(ScullyEra::Veteran, Tone::Dry);
-        assert!(r.rate > p.rate && p.rate > o.rate, "rookie > prime > veteran rate");
-        assert!(r.pitch > p.pitch && p.pitch > o.pitch, "rookie > prime > veteran pitch");
-        assert!(r.pause_ms < p.pause_ms && p.pause_ms < o.pause_ms, "pause grows with age");
+        assert!(
+            r.rate > p.rate && p.rate > o.rate,
+            "rookie > prime > veteran rate"
+        );
+        assert!(
+            r.pitch > p.pitch && p.pitch > o.pitch,
+            "rookie > prime > veteran pitch"
+        );
+        assert!(
+            r.pause_ms < p.pause_ms && p.pause_ms < o.pause_ms,
+            "pause grows with age"
+        );
         assert_eq!(r.voice_id, "V-007-R");
         assert_eq!(p.voice_id, "V-007-P");
         assert_eq!(o.voice_id, "V-007-V");
@@ -341,19 +357,25 @@ mod era_tests {
         let dry = v(ScullyEra::Prime, Tone::Dry);
         let steel = v(ScullyEra::Prime, Tone::Steel);
         let warm = v(ScullyEra::Prime, Tone::Warm);
-        assert!(steel.rate < dry.rate && steel.pitch < dry.pitch, "steel is colder");
+        assert!(
+            steel.rate < dry.rate && steel.pitch < dry.pitch,
+            "steel is colder"
+        );
         assert!(warm.pitch > dry.pitch, "warm lifts pitch");
-        assert_eq!(dry.emphasis, steel.emphasis, "tone never changes emphasis target");
+        assert_eq!(
+            dry.emphasis, steel.emphasis,
+            "tone never changes emphasis target"
+        );
     }
 
     #[test]
     fn test_era_parsing_is_forgiving() {
-        assert_eq!(ScullyEra::from_str("young"), ScullyEra::Rookie);
-        assert_eq!(ScullyEra::from_str("1993"), ScullyEra::Rookie);
-        assert_eq!(ScullyEra::from_str("older"), ScullyEra::Veteran);
-        assert_eq!(ScullyEra::from_str("whatever"), ScullyEra::Prime);
-        assert_eq!(Tone::from_str("steel"), Tone::Steel);
-        assert_eq!(Tone::from_str("huh"), Tone::Dry);
+        assert_eq!(ScullyEra::parse_label("young"), ScullyEra::Rookie);
+        assert_eq!(ScullyEra::parse_label("1993"), ScullyEra::Rookie);
+        assert_eq!(ScullyEra::parse_label("older"), ScullyEra::Veteran);
+        assert_eq!(ScullyEra::parse_label("whatever"), ScullyEra::Prime);
+        assert_eq!(Tone::parse_label("steel"), Tone::Steel);
+        assert_eq!(Tone::parse_label("huh"), Tone::Dry);
     }
 }
 
@@ -369,18 +391,17 @@ mod era_tests {
 /// through the public API (`RealLivingPerson` is a private variant).
 ///
 /// The engine trait below is backend-agnostic. Research (2026-10-07):
-///   - Chatterbox (Resemble AI), MIT — primary pick. 24k+ stars, 1M+ HF
+///     - Chatterbox (Resemble AI), MIT — primary pick. 24k+ stars, 1M+ HF
 ///     downloads, 500k+ hours training. 7-20s reference clips. English-only.
 ///     License permits shipping. GPU: ~4-8GB VRAM fp16 on consumer cards.
-///   - VoxCPM2, Apache-2.0 — alternate. 48kHz out, 30 languages, accepts
+///     - VoxCPM2, Apache-2.0 — alternate. 48kHz out, 30 languages, accepts
 ///     16kHz refs, fine-tune path with 5-10 min of audio.
-///   - XTTS v2 (Coqui) — legacy fallback. 17 languages, ~6s refs, but
+///     - XTTS v2 (Coqui) — legacy fallback. 17 languages, ~6s refs, but
 ///     Coqui Public Model License is non-commercial: research/personal only.
-///   - F5-TTS (CC-BY-NC), Fish Speech (CC-BY-NC-SA) — research lane only.
+///     - F5-TTS (CC-BY-NC), Fish Speech (CC-BY-NC-SA) — research lane only.
 /// This VM has no GPU; the seam stays local-stubbed until a GPU host or
 /// consented reference audio exists. See VOICE-CLONING.md for the full
 /// research brief and deployment recipes.
-
 /// Declared consent for a cloned voice. The gate is structural:
 /// only these variants exist in the public API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -485,7 +506,9 @@ impl std::fmt::Display for CloneError {
         match self {
             CloneError::NotConfigured => write!(f, "no cloning engine configured on this host"),
             CloneError::ConsentMissing => write!(f, "REFUSED: no valid consent for cloned voice"),
-            CloneError::NoReferenceClip => write!(f, "REFUSED: no consented reference clip supplied"),
+            CloneError::NoReferenceClip => {
+                write!(f, "REFUSED: no consented reference clip supplied")
+            }
             CloneError::BackendUnavailable(s) => write!(f, "backend unavailable: {}", s),
             CloneError::SynthesisFailed(s) => write!(f, "synthesis failed: {}", s),
         }
@@ -569,7 +592,9 @@ pub fn parse_consent(s: &str) -> Option<ConsentRecord> {
     } else if let Some(lic) = s.strip_prefix("licensed:") {
         let lic = lic.trim();
         if !lic.is_empty() {
-            return Some(ConsentRecord::LicensedOriginal { licence_ref: lic.to_string() });
+            return Some(ConsentRecord::LicensedOriginal {
+                licence_ref: lic.to_string(),
+            });
         }
     }
     None
@@ -597,8 +622,7 @@ pub fn decide_clone(
     reference_wav: Option<&str>,
     consent: Option<&str>,
 ) -> CloneDecision {
-    let requested =
-        backend.is_some() || reference_wav.is_some() || consent.is_some();
+    let requested = backend.is_some() || reference_wav.is_some() || consent.is_some();
     if !requested {
         return CloneDecision::Off;
     }
@@ -611,7 +635,9 @@ pub fn decide_clone(
         None => return CloneDecision::Refused(CloneError::NoReferenceClip),
     };
     CloneDecision::Ready(ClonePlan {
-        backend: backend.and_then(parse_backend).unwrap_or(CloningBackend::Chatterbox),
+        backend: backend
+            .and_then(parse_backend)
+            .unwrap_or(CloningBackend::Chatterbox),
         reference_wav,
         consent,
     })
@@ -661,7 +687,12 @@ mod cloning_tests {
             voice_id: "V-007-R+clone".into(),
             reference_wav: "/tmp/ref.wav".into(),
             consent: consent.unwrap_or(ConsentRecord::OwnerRecorded { recorded_at_ms: 1 }),
-            voice: derive_voice(EpistemicStatus::Unknown, Intent::Question, Emotion::Neutral, "indy"),
+            voice: derive_voice(
+                EpistemicStatus::Unknown,
+                Intent::Question,
+                Emotion::Neutral,
+                "indy",
+            ),
         }
     }
 
@@ -675,15 +706,25 @@ mod cloning_tests {
     #[test]
     fn test_consent_gate_refuses_empty_records() {
         let bad_owner = req_with(Some(ConsentRecord::OwnerRecorded { recorded_at_ms: 0 }));
-        assert_eq!(check_consent(&bad_owner).unwrap_err(), CloneError::ConsentMissing);
-        let bad_lic = req_with(Some(ConsentRecord::LicensedOriginal { licence_ref: String::new() }));
-        assert_eq!(check_consent(&bad_lic).unwrap_err(), CloneError::ConsentMissing);
+        assert_eq!(
+            check_consent(&bad_owner).unwrap_err(),
+            CloneError::ConsentMissing
+        );
+        let bad_lic = req_with(Some(ConsentRecord::LicensedOriginal {
+            licence_ref: String::new(),
+        }));
+        assert_eq!(
+            check_consent(&bad_lic).unwrap_err(),
+            CloneError::ConsentMissing
+        );
     }
 
     #[test]
     fn test_consent_gate_accepts_valid_records() {
         assert!(check_consent(&req_with(None)).is_ok());
-        let lic = req_with(Some(ConsentRecord::LicensedOriginal { licence_ref: "contract-2026-001".into() }));
+        let lic = req_with(Some(ConsentRecord::LicensedOriginal {
+            licence_ref: "contract-2026-001".into(),
+        }));
         assert!(check_consent(&lic).is_ok());
     }
 
@@ -735,10 +776,16 @@ mod live_path_tests {
     fn test_decide_clone_refuses_without_consent() {
         // Reference present, consent absent -> hard refusal.
         let d = decide_clone(Some("chatterbox"), Some("/tmp/ref.wav"), None);
-        assert!(matches!(d, CloneDecision::Refused(CloneError::ConsentMissing)));
+        assert!(matches!(
+            d,
+            CloneDecision::Refused(CloneError::ConsentMissing)
+        ));
         // Empty consent string is the same as absent.
         let d = decide_clone(None, Some("/tmp/ref.wav"), Some(""));
-        assert!(matches!(d, CloneDecision::Refused(CloneError::ConsentMissing)));
+        assert!(matches!(
+            d,
+            CloneDecision::Refused(CloneError::ConsentMissing)
+        ));
     }
 
     #[test]
@@ -766,7 +813,10 @@ mod live_path_tests {
     fn test_decide_clone_refuses_without_reference_clip() {
         // Valid consent but no clip -> refused, never attempted.
         let d = decide_clone(None, None, Some("owner:12345"));
-        assert!(matches!(d, CloneDecision::Refused(CloneError::NoReferenceClip)));
+        assert!(matches!(
+            d,
+            CloneDecision::Refused(CloneError::NoReferenceClip)
+        ));
     }
 
     #[test]
@@ -809,9 +859,17 @@ mod live_path_tests {
         let plan = ClonePlan {
             backend: CloningBackend::Chatterbox,
             reference_wav: "/tmp/ref.wav".into(),
-            consent: ConsentRecord::OwnerRecorded { recorded_at_ms: 999 },
+            consent: ConsentRecord::OwnerRecorded {
+                recorded_at_ms: 999,
+            },
         };
-        let r = attempt_clone(&engine, &plan, "The truth is out there.", "V-007-P", &prosody());
+        let r = attempt_clone(
+            &engine,
+            &plan,
+            "The truth is out there.",
+            "V-007-P",
+            &prosody(),
+        );
         assert_eq!(r.unwrap_err(), CloneError::NotConfigured);
     }
 
@@ -848,7 +906,12 @@ mod corner_tests {
         for p in personas {
             for e in eras {
                 let v = derive_voice_full(
-                    EpistemicStatus::Unknown, Intent::Question, Emotion::Neutral, p, e, Tone::Dry,
+                    EpistemicStatus::Unknown,
+                    Intent::Question,
+                    Emotion::Neutral,
+                    p,
+                    e,
+                    Tone::Dry,
                 );
                 assert!(v.voice_id.starts_with("V-0"), "id {:?}", v.voice_id);
                 assert_eq!(v.voice_id.len(), 7, "id {:?}", v.voice_id);
@@ -858,8 +921,12 @@ mod corner_tests {
         assert_eq!(seen.len(), 15);
         // Unknown persona degrades to the indy base, not a panic.
         let v = derive_voice_full(
-            EpistemicStatus::Unknown, Intent::Question, Emotion::Neutral,
-            "", ScullyEra::Prime, Tone::Dry,
+            EpistemicStatus::Unknown,
+            Intent::Question,
+            Emotion::Neutral,
+            "",
+            ScullyEra::Prime,
+            Tone::Dry,
         );
         assert_eq!(v.voice_id, "V-007-P");
     }
@@ -870,16 +937,27 @@ mod corner_tests {
         // equal VALUES (and, being &'static, the same address — no per-call
         // allocation is possible by construction).
         let a = derive_voice_full(
-            EpistemicStatus::Unknown, Intent::AuthorityRequest, Emotion::Skeptical,
-            "wreck", ScullyEra::Veteran, Tone::Steel,
+            EpistemicStatus::Unknown,
+            Intent::AuthorityRequest,
+            Emotion::Skeptical,
+            "wreck",
+            ScullyEra::Veteran,
+            Tone::Steel,
         );
         let b = derive_voice_full(
-            EpistemicStatus::Unknown, Intent::AuthorityRequest, Emotion::Skeptical,
-            "wreck", ScullyEra::Veteran, Tone::Steel,
+            EpistemicStatus::Unknown,
+            Intent::AuthorityRequest,
+            Emotion::Skeptical,
+            "wreck",
+            ScullyEra::Veteran,
+            Tone::Steel,
         );
         assert_eq!(a.voice_id, b.voice_id);
         assert_eq!(a.voice_id, "V-034-V");
-        assert!(std::ptr::eq(a.voice_id, b.voice_id), "static ids share address");
+        assert!(
+            std::ptr::eq(a.voice_id, b.voice_id),
+            "static ids share address"
+        );
     }
 
     #[test]
@@ -887,7 +965,9 @@ mod corner_tests {
         // Whitespace is trimmed.
         assert!(matches!(
             parse_consent("  owner:123  "),
-            Some(ConsentRecord::OwnerRecorded { recorded_at_ms: 123 })
+            Some(ConsentRecord::OwnerRecorded {
+                recorded_at_ms: 123
+            })
         ));
         // Case-sensitive prefix: fail-closed, not forgiving.
         assert_eq!(parse_consent("OWNER:123"), None);
@@ -900,8 +980,9 @@ mod corner_tests {
         assert_eq!(parse_consent("licensed:   "), None);
         // Nested-prefix confusion stays LicensedOriginal, never OwnerRecorded.
         match parse_consent("licensed:owner:123") {
-            Some(ConsentRecord::LicensedOriginal { licence_ref }) =>
-                assert_eq!(licence_ref, "owner:123"),
+            Some(ConsentRecord::LicensedOriginal { licence_ref }) => {
+                assert_eq!(licence_ref, "owner:123")
+            }
             other => panic!("unexpected {other:?}"),
         }
         // Empty string and bare prefixes fail closed.
@@ -914,7 +995,10 @@ mod corner_tests {
     fn test_parse_backend_edge_cases() {
         assert_eq!(parse_backend("VOXCPM2"), Some(CloningBackend::VoxCpm2));
         assert_eq!(parse_backend("  xtts  "), Some(CloningBackend::XttsV2));
-        assert_eq!(parse_backend("ChatterBox"), Some(CloningBackend::Chatterbox));
+        assert_eq!(
+            parse_backend("ChatterBox"),
+            Some(CloningBackend::Chatterbox)
+        );
         assert_eq!(parse_backend(""), None);
         assert_eq!(parse_backend("   "), None);
         assert_eq!(parse_backend("gpt-4"), None);
@@ -925,23 +1009,47 @@ mod corner_tests {
         // A garbage backend string alone counts as "requested" but consent
         // is still mandatory: hard refusal, never an attempt.
         let d = decide_clone(Some("not-a-backend"), None, None);
-        assert!(matches!(d, CloneDecision::Refused(CloneError::ConsentMissing)));
+        assert!(matches!(
+            d,
+            CloneDecision::Refused(CloneError::ConsentMissing)
+        ));
         // Whitespace-only reference is the same as absent.
         let d = decide_clone(None, Some("   "), Some("owner:42"));
-        assert!(matches!(d, CloneDecision::Refused(CloneError::NoReferenceClip)));
+        assert!(matches!(
+            d,
+            CloneDecision::Refused(CloneError::NoReferenceClip)
+        ));
     }
 
     #[test]
     fn test_derive_voice_never_panics_on_any_input_combo() {
         // Exhaust the input space: no combo may produce NaN, infinite, or
         // out-of-range prosody.
-        for epi in [EpistemicStatus::Unknown, EpistemicStatus::Proven, EpistemicStatus::Disproven] {
-            for intent in [Intent::Question, Intent::AuthorityRequest, Intent::HypothesisAssertion,
-                           Intent::ClaimAssertion, Intent::Converse] {
+        for epi in [
+            EpistemicStatus::Unknown,
+            EpistemicStatus::Proven,
+            EpistemicStatus::Disproven,
+        ] {
+            for intent in [
+                Intent::Question,
+                Intent::AuthorityRequest,
+                Intent::HypothesisAssertion,
+                Intent::ClaimAssertion,
+                Intent::Converse,
+            ] {
                 for era in [ScullyEra::Rookie, ScullyEra::Prime, ScullyEra::Veteran] {
                     for tone in [Tone::Dry, Tone::Clinical, Tone::Warm, Tone::Steel] {
-                        for persona in ["indy", "lucidota", "archivist", "wreck", "captain", "", "x"] {
-                            let v = derive_voice_full(epi, intent, Emotion::Neutral, persona, era, tone);
+                        for persona in
+                            ["indy", "lucidota", "archivist", "wreck", "captain", "", "x"]
+                        {
+                            let v = derive_voice_full(
+                                epi,
+                                intent,
+                                Emotion::Neutral,
+                                persona,
+                                era,
+                                tone,
+                            );
                             assert!(v.rate.is_finite() && (0.5..=2.0).contains(&v.rate));
                             assert!(v.pitch.is_finite() && (0.0..=2.0).contains(&v.pitch));
                             assert!(v.pause_ms <= 2000);

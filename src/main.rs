@@ -8,10 +8,9 @@
 mod ai;
 mod api;
 
-use indy_reads::{domain, governor, receipts};
 use governor::AppState;
+use indy_reads::governor;
 use std::sync::Arc;
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() {

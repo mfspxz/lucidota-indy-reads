@@ -15,3 +15,6 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+# release bundles + local deploy target (reproducible via ./release; never commit)
+release/
+deploy-local/

@@ -8,18 +8,13 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Ternary epistemic status. UNKNOWN is a valid result, not a failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EpistemicStatus {
     Proven,
     Disproven,
+    #[default]
     Unknown,
-}
-
-impl Default for EpistemicStatus {
-    fn default() -> Self {
-        EpistemicStatus::Unknown
-    }
 }
 
 /// Where a claim came from. A GeneratedHypothesis is NEVER silently
@@ -202,7 +197,10 @@ mod tests {
     #[test]
     fn test_unknown_is_preserved() {
         let c = Claim::new("lake monster exists", ProvenanceSource::User);
-        assert_eq!(assess_claim(&c, &[], &EvidencePolicy::default()), EpistemicStatus::Unknown);
+        assert_eq!(
+            assess_claim(&c, &[], &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
     }
 
     #[test]
@@ -210,14 +208,20 @@ mod tests {
         // A user assertion alone never promotes a claim.
         let c = Claim::new("x", ProvenanceSource::User);
         let e = ev(EvidenceStatus::Unverified);
-        assert_eq!(assess_claim(&c, &[e], &EvidencePolicy::default()), EpistemicStatus::Unknown);
+        assert_eq!(
+            assess_claim(&c, &[e], &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
     }
 
     #[test]
     fn test_verified_evidence_can_promote_claim() {
         let c = Claim::new("x", ProvenanceSource::User);
         let es = vec![ev(EvidenceStatus::Verified), ev(EvidenceStatus::Verified)];
-        assert_eq!(assess_claim(&c, &es, &EvidencePolicy::default()), EpistemicStatus::Proven);
+        assert_eq!(
+            assess_claim(&c, &es, &EvidencePolicy::default()),
+            EpistemicStatus::Proven
+        );
     }
 
     #[test]
@@ -227,7 +231,10 @@ mod tests {
             ev(EvidenceStatus::Contradicted),
             ev(EvidenceStatus::Contradicted),
         ];
-        assert_eq!(assess_claim(&c, &es, &EvidencePolicy::default()), EpistemicStatus::Disproven);
+        assert_eq!(
+            assess_claim(&c, &es, &EvidencePolicy::default()),
+            EpistemicStatus::Disproven
+        );
     }
 
     #[test]
@@ -235,11 +242,21 @@ mod tests {
         // "Sufficient evidence" is explicit policy, not hardcoded opinion.
         let c = Claim::new("x", ProvenanceSource::User);
         let es = vec![ev(EvidenceStatus::Verified)];
-        let strict = EvidencePolicy { policy_id: "strict.v1".into(), version: "1".into(),
-            proven_threshold: 3, disproven_threshold: 3, inferences_count: false };
+        let strict = EvidencePolicy {
+            policy_id: "strict.v1".into(),
+            version: "1".into(),
+            proven_threshold: 3,
+            disproven_threshold: 3,
+            inferences_count: false,
+        };
         assert_eq!(assess_claim(&c, &es, &strict), EpistemicStatus::Unknown);
-        let lax = EvidencePolicy { policy_id: "lax.v1".into(), version: "1".into(),
-            proven_threshold: 1, disproven_threshold: 1, inferences_count: false };
+        let lax = EvidencePolicy {
+            policy_id: "lax.v1".into(),
+            version: "1".into(),
+            proven_threshold: 1,
+            disproven_threshold: 1,
+            inferences_count: false,
+        };
         assert_eq!(assess_claim(&c, &es, &lax), EpistemicStatus::Proven);
     }
 
@@ -261,7 +278,10 @@ mod tests {
         let mut e2 = ev(EvidenceStatus::Verified);
         e2.kind = EvidenceKind::Inference;
         // Inferences (hypotheses) cannot promote to PROVEN.
-        assert_eq!(assess_claim(&c, &[e1, e2], &EvidencePolicy::default()), EpistemicStatus::Unknown);
+        assert_eq!(
+            assess_claim(&c, &[e1, e2], &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
     }
 }
 
@@ -286,22 +306,43 @@ mod corner_tests {
         // Equal verified support and contradiction: the oracle cannot
         // decide, so it must NOT flip either way.
         let c = Claim::new("x", ProvenanceSource::User);
-        let es = vec![ev(EvidenceStatus::Verified), ev(EvidenceStatus::Verified),
-                      ev(EvidenceStatus::Contradicted), ev(EvidenceStatus::Contradicted)];
-        assert_eq!(assess_claim(&c, &es, &EvidencePolicy::default()), EpistemicStatus::Unknown);
+        let es = vec![
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Contradicted),
+            ev(EvidenceStatus::Contradicted),
+        ];
+        assert_eq!(
+            assess_claim(&c, &es, &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
     }
 
     #[test]
     fn test_assess_claim_majority_wins() {
         let c = Claim::new("x", ProvenanceSource::User);
-        let prov = vec![ev(EvidenceStatus::Verified), ev(EvidenceStatus::Verified),
-                        ev(EvidenceStatus::Verified), ev(EvidenceStatus::Contradicted),
-                        ev(EvidenceStatus::Contradicted)];
-        assert_eq!(assess_claim(&c, &prov, &EvidencePolicy::default()), EpistemicStatus::Proven);
-        let dis = vec![ev(EvidenceStatus::Verified), ev(EvidenceStatus::Verified),
-                       ev(EvidenceStatus::Contradicted), ev(EvidenceStatus::Contradicted),
-                       ev(EvidenceStatus::Contradicted)];
-        assert_eq!(assess_claim(&c, &dis, &EvidencePolicy::default()), EpistemicStatus::Disproven);
+        let prov = vec![
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Contradicted),
+            ev(EvidenceStatus::Contradicted),
+        ];
+        assert_eq!(
+            assess_claim(&c, &prov, &EvidencePolicy::default()),
+            EpistemicStatus::Proven
+        );
+        let dis = vec![
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Verified),
+            ev(EvidenceStatus::Contradicted),
+            ev(EvidenceStatus::Contradicted),
+            ev(EvidenceStatus::Contradicted),
+        ];
+        assert_eq!(
+            assess_claim(&c, &dis, &EvidencePolicy::default()),
+            EpistemicStatus::Disproven
+        );
     }
 
     #[test]
@@ -314,8 +355,14 @@ mod corner_tests {
             e
         };
         let es = vec![mk(), mk()];
-        assert_eq!(assess_claim(&c, &es, &EvidencePolicy::default()), EpistemicStatus::Unknown);
-        let permissive = EvidencePolicy { inferences_count: true, ..EvidencePolicy::default() };
+        assert_eq!(
+            assess_claim(&c, &es, &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
+        let permissive = EvidencePolicy {
+            inferences_count: true,
+            ..EvidencePolicy::default()
+        };
         assert_eq!(assess_claim(&c, &es, &permissive), EpistemicStatus::Proven);
     }
 
@@ -332,6 +379,9 @@ mod corner_tests {
     fn test_claim_new_with_empty_text_stays_unknown() {
         // Domain does not police content; the transport layer validates.
         let c = Claim::new("", ProvenanceSource::User);
-        assert_eq!(assess_claim(&c, &[], &EvidencePolicy::default()), EpistemicStatus::Unknown);
+        assert_eq!(
+            assess_claim(&c, &[], &EvidencePolicy::default()),
+            EpistemicStatus::Unknown
+        );
     }
 }

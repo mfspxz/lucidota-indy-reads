@@ -25,15 +25,29 @@ use crate::governor::Intent;
 /// A presentation opportunity produced by a real event.
 #[derive(Debug, Clone)]
 pub enum TheaterEvent {
-    UserQuery { intent: Intent },
-    EvidenceFound { novelty: Novelty, contradiction: bool },
+    UserQuery {
+        intent: Intent,
+    },
+    EvidenceFound {
+        novelty: Novelty,
+        contradiction: bool,
+    },
     RetrievalStarted,
-    ContradictionFound { challenged: bool },
-    VerdictReached { state: EpistemicStatus },
-    ContinuityChanged { from: String, to: String },
+    ContradictionFound {
+        challenged: bool,
+    },
+    VerdictReached {
+        state: EpistemicStatus,
+    },
+    ContinuityChanged {
+        from: String,
+        to: String,
+    },
     /// Live truth reconciliation: the user corrected a claim mid-flight.
     /// Speech stops, the claim mutates, the receipt records the retraction.
-    CorrectionDetected { claim: String },
+    CorrectionDetected {
+        claim: String,
+    },
     SourceFailed,
 }
 
@@ -131,7 +145,9 @@ impl TheaterEngine {
                     cues.push(TheaterCue::Beat { ms: self.beat(450) });
                     cues.push(TheaterCue::Gaze { target: "evidence" });
                     if self.afford_speak(0.25) {
-                        cues.push(TheaterCue::Speak { line: CONTRADICTION });
+                        cues.push(TheaterCue::Speak {
+                            line: CONTRADICTION,
+                        });
                         self.spend(0.25);
                     }
                     self.spend(0.2);
@@ -151,7 +167,10 @@ impl TheaterEngine {
                     cues.push(TheaterCue::Beat { ms: 80 });
                 }
             },
-            TheaterEvent::EvidenceFound { novelty, contradiction } => {
+            TheaterEvent::EvidenceFound {
+                novelty,
+                contradiction,
+            } => {
                 if *contradiction {
                     cues.push(TheaterCue::Beat { ms: self.beat(600) });
                     cues.push(TheaterCue::Speak { line: WAIT });
@@ -219,7 +238,9 @@ impl TheaterEngine {
                 cues.push(TheaterCue::Reveal { what: "receipt" });
             }
             TheaterEvent::SourceFailed => {
-                cues.push(TheaterCue::Speak { line: "That source isn't cooperating." });
+                cues.push(TheaterCue::Speak {
+                    line: "That source isn't cooperating.",
+                });
                 self.spend(0.1);
             }
         }
@@ -243,9 +264,15 @@ mod tests {
         let cues = t.cues_for(&TheaterEvent::UserQuery {
             intent: Intent::AuthorityRequest,
         });
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Beat { ms } if *ms >= 400)));
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Speak { line } if *line == CONTRADICTION)));
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Gaze { target } if *target == "evidence")));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Beat { ms } if *ms >= 400)));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Speak { line } if *line == CONTRADICTION)));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Gaze { target } if *target == "evidence")));
     }
 
     #[test]
@@ -304,7 +331,8 @@ mod tests {
             let mut t = TheaterEngine::new();
             let cues = t.cues_for(&TheaterEvent::VerdictReached { state });
             assert!(
-                cues.iter().any(|c| matches!(c, TheaterCue::Reveal { what } if *what == "receipt")),
+                cues.iter()
+                    .any(|c| matches!(c, TheaterCue::Reveal { what } if *what == "receipt")),
                 "verdict {:?} must reveal its receipt",
                 state
             );
@@ -318,7 +346,9 @@ mod tests {
             from: "UNKNOWN".into(),
             to: "PROVEN".into(),
         });
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Speak { line } if *line == CHANGED)));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Speak { line } if *line == CHANGED)));
     }
 
     #[test]
@@ -328,11 +358,19 @@ mod tests {
             claim: "expedition_year".into(),
         });
         // Acknowledges, reveals the receipt, never re-litigates.
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Speak { line } if *line == GOT_IT)));
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Gesture { name } if *name == "nod")));
-        assert!(cues.iter().any(|c| matches!(c, TheaterCue::Reveal { what } if *what == "receipt")));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Speak { line } if *line == GOT_IT)));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Gesture { name } if *name == "nod")));
+        assert!(cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Reveal { what } if *what == "receipt")));
         // No contradiction theater: a correction is cooperation, not conflict.
-        assert!(!cues.iter().any(|c| matches!(c, TheaterCue::Speak { line } if *line == CONTRADICTION)));
+        assert!(!cues
+            .iter()
+            .any(|c| matches!(c, TheaterCue::Speak { line } if *line == CONTRADICTION)));
     }
 
     #[test]

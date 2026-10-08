@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ./verify — one-command behavioral verification, local-first.
+#
+# Work-order E3: "CI must not report green while deployment identity and
+# behavioral proof stay unknown." This script exits 0 (VERIFIED) ONLY when:
+#   1. contract tests are green (cargo test),
+#   2. a local instance starts, and /health identity matches the source
+#      tree it was built from (commit == git rev-parse HEAD, contract
+#      version recorded),
+#   3. a live turn completes and the emitted receipt chain verifies under
+#      the library's own indy-verify.
+# Anything else -> exit 1 with an explicit FAILED/UNKNOWN verdict.
+# It never prints green while behavioral proof is unknown.
+#
+# Env: INDY_VERIFY_BIN (default target/debug/indy-reads),
+#      INDY_VERIFY_PORT (default 18080).
+set -euo pipefail
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+cd "$(dirname "$0")"
+
+BIN="${INDY_VERIFY_BIN:-target/debug/indy-reads}"
+PORT="${INDY_VERIFY_PORT:-18080}"
+OUT="${INDY_VERIFY_OUT:-/tmp/indy-verify.json}"
+
+fail() {
+  local reason="$1"
+  cat > "$OUT" <<EOF
+{
+  "verdict": "FAILED",
+  "reason": $(printf '%s' "$reason" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
+  "behavioral_proof": "UNKNOWN",
+  "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+  echo "VERIFY: FAILED — $reason" >&2
+  echo "  verdict written to $OUT"
+  exit 1
+}
+
+echo "==> [1/4] building bins"
+cargo build --bins >/tmp/indy-verify-build.log 2>&1 \
+  || fail "cargo build --bins failed (see /tmp/indy-verify-build.log)"
+[ -x "$BIN" ] || fail "binary $BIN missing after build"
+
+BIN_SHA="$(sha256sum "$BIN" | cut -d' ' -f1)"
+echo "    probing binary: $BIN (sha256 ${BIN_SHA:0:16}…)"
+
+echo "==> [2/4] contract tests"
+cargo test --all >/tmp/indy-verify-test.log 2>&1 \
+  || fail "cargo test failed (see /tmp/indy-verify-test.log)"
+TEST_LINE="$(grep -E 'test result' /tmp/indy-verify-test.log | awk '{p+=$4; f+=$6} END {print p" passed, "f" failed"}')"
+echo "    $TEST_LINE"
+
+echo "==> [3/4] local behavioral probe (fixture mode, no keys)"
+SRC_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo no-vcs)"
+PORT="$PORT" nohup "$BIN" >/tmp/indy-verify-server.log 2>&1 &
+SRV=$!
+trap 'kill $SRV 2>/dev/null || true' EXIT
+
+READY=0
+for _ in $(seq 1 40); do
+  if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then READY=1; break; fi
+  sleep 0.5
+done
+[ "$READY" = 1 ] || fail "server did not become ready on port $PORT (see /tmp/indy-verify-server.log)"
+
+HEALTH="$(curl -sf "http://127.0.0.1:$PORT/health")"
+RUN_COMMIT="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))')"
+RUN_CONTRACT="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("contract_version",""))')"
+RUN_VERSION="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')"
+RUN_DIRTY="$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("dirty_worktree",""))')"
+[ -n "$RUN_COMMIT" ] || fail "/health returned no commit — identity unknown"
+[ "$RUN_COMMIT" = "$SRC_COMMIT" ] || fail "deployment identity mismatch: runtime commit $RUN_COMMIT != source commit $SRC_COMMIT (source truth != runtime truth)"
+echo "    identity: runtime commit == source commit ($SRC_COMMIT)"
+echo "    contract_version: $RUN_CONTRACT, crate version: $RUN_VERSION, dirty_worktree: $RUN_DIRTY"
+
+TURN="$(curl -sf -X POST "http://127.0.0.1:$PORT/api/turn" \
+  -H 'Content-Type: application/json' \
+  -d '{"utterance":"verify probe: what is your name"}')"
+printf '%s' "$TURN" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("reply"), "empty reply"' \
+  || fail "/api/turn did not return a reply"
+echo "    turn: completed with reply"
+
+echo "==> [4/4] receipt-chain verification"
+curl -sf "http://127.0.0.1:$PORT/api/receipts" -o /tmp/indy-verify-receipts.json \
+  || fail "/api/receipts unreachable"
+RECEIPT_SHA="$(sha256sum /tmp/indy-verify-receipts.json | cut -d' ' -f1)"
+if ./target/debug/indy-verify /tmp/indy-verify-receipts.json > /tmp/indy-verify-chain.json 2>&1; then
+  CHAIN_VERDICT="VERIFIED"
+else
+  CHAIN_VERDICT="FAILED"
+fi
+[ "$CHAIN_VERDICT" = "VERIFIED" ] || fail "receipt chain did not verify: $(cat /tmp/indy-verify-chain.json)"
+N_RCPT="$(python3 -c 'import json; print(json.load(open("/tmp/indy-verify-chain.json"))["receipts"])')"
+N_CHAIN="$(python3 -c 'import json; print(json.load(open("/tmp/indy-verify-chain.json"))["chains"])')"
+echo "    receipts: $N_RCPT across $N_CHAIN chain(s) — chain linkage VERIFIED"
+
+kill $SRV 2>/dev/null || true
+trap - EXIT
+
+cat > "$OUT" <<EOF
+{
+  "verdict": "VERIFIED",
+  "behavioral_proof": "ESTABLISHED",
+  "binary": "$BIN",
+  "binary_sha256": "$BIN_SHA",
+  "source_commit": "$SRC_COMMIT",
+  "runtime_commit": "$RUN_COMMIT",
+  "dirty_worktree": "$RUN_DIRTY",
+  "contract_version": "$RUN_CONTRACT",
+  "crate_version": "$RUN_VERSION",
+  "tests": "$TEST_LINE",
+  "receipts_verified": $N_RCPT,
+  "chains_verified": $N_CHAIN,
+  "receipts_sha256": "$RECEIPT_SHA",
+  "timestamp_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+echo "VERIFY: GREEN — behavioral proof established ($N_RCPT receipts, $N_CHAIN chain(s))"
+echo "  verdict written to $OUT"

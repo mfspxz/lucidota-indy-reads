@@ -6,8 +6,6 @@
 
 pub mod alebex;
 pub mod avatar;
-pub mod voice;
-pub mod theater;
 pub mod diarize;
 pub mod domain;
 pub mod embeddings;
@@ -15,6 +13,8 @@ pub mod governor;
 pub mod mcp;
 pub mod receipts;
 pub mod store;
+pub mod theater;
+pub mod voice;
 
 /// Build-time provenance (C1). Baked in by build.rs: the binary carries its
 /// own source identity, so /health can report it and a reviewer can compare

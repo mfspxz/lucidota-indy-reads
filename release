@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# ./release — build the release artifact bundle (work-order E4).
+#
+# Aborts unless ./verify is GREEN against the RELEASE binary. The bundle is
+# reproducible: same source commit + same toolchain => same checksums
+# (modulo build timestamps, recorded honestly in BUILD.json).
+#
+# Bundle layout: release/indy-reads-<version>-<shortsha>/
+#   bin/indy-reads  bin/indy-verify      versioned binaries
+#   Cargo.lock                              dependency identity (pinned)
+#   BUILD.json                              version, source identity, build
+#                                           metadata, contract version,
+#                                           dependency identity
+#   CHECKSUMS.sha256                        sha256 of every bundled file
+#   VERIFY.json                             verification receipt (from ./verify
+#                                           against THIS release binary)
+set -euo pipefail
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+cd "$(dirname "$0")"
+
+VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+SHORT_SHA="$(git rev-parse --short HEAD)"
+FULL_SHA="$(git rev-parse HEAD)"
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ -n "$(git status --porcelain)" ]; then
+  echo "RELEASE: REFUSED — dirty worktree. Commit or stash first; a release" >&2
+  echo "must have an exact source identity." >&2
+  exit 1
+fi
+
+echo "==> building --release"
+cargo build --release --bins
+
+echo "==> verifying the RELEASE binary (./verify must be green)"
+INDY_VERIFY_BIN="$PWD/target/release/indy-reads" \
+INDY_VERIFY_OUT="/tmp/indy-release-verify.json" \
+  ./verify
+[ "$(python3 -c 'import json; print(json.load(open("/tmp/indy-release-verify.json"))["verdict"])')" = "VERIFIED" ] \
+  || { echo "RELEASE: REFUSED — ./verify not green"; exit 1; }
+
+DIR="release/indy-reads-${VERSION}-${SHORT_SHA}"
+rm -rf "$DIR"
+mkdir -p "$DIR/bin"
+cp target/release/indy-reads target/release/indy-verify "$DIR/bin/"
+cp Cargo.lock "$DIR/"
+cp /tmp/indy-release-verify.json "$DIR/VERIFY.json"
+
+CONTRACT="$(grep -m1 'CONTRACT_VERSION' src/api.rs | sed 's/.*"\([0-9]*\)".*/\1/')"
+LOCK_SHA="$(sha256sum Cargo.lock | cut -d' ' -f1)"
+cat > "$DIR/BUILD.json" <<EOF
+{
+  "name": "indy-reads",
+  "version": "$VERSION",
+  "source_commit": "$FULL_SHA",
+  "branch": "$BRANCH",
+  "dirty_worktree": false,
+  "rustc": "$(rustc --version)",
+  "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "contract_version": "$CONTRACT",
+  "cargo_lock_sha256": "$LOCK_SHA",
+  "host": "$(uname -sm)"
+}
+EOF
+
+(cd "$DIR" && sha256sum bin/indy-reads bin/indy-verify Cargo.lock BUILD.json VERIFY.json > CHECKSUMS.sha256)
+(cd "$DIR" && sha256sum -c CHECKSUMS.sha256) | grep -c ': OK' | xargs -I{} echo "checksums: {} files OK"
+
+echo "RELEASE: bundle ready at $DIR"
+echo "  binary:      $(sha256sum $DIR/bin/indy-reads | cut -d' ' -f1)"
+echo "  source:      $FULL_SHA"
+echo "  contract:    v$CONTRACT"
+echo "  verify:      $(python3 -c 'import json; print(json.load(open("'"$DIR"'/VERIFY.json"))["behavioral_proof"]')"

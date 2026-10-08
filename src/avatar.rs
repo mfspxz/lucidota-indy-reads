@@ -87,17 +87,9 @@ pub struct AvatarState {
 
 /// Deterministic derivation: graph/governor state -> avatar behavior.
 /// The LLM has no say here.
-pub fn derive_avatar(
-    epistemic: EpistemicStatus,
-    intent: Intent,
-    speaking: bool,
-) -> AvatarState {
+pub fn derive_avatar(epistemic: EpistemicStatus, intent: Intent, speaking: bool) -> AvatarState {
     let (emotion, gesture, overlay) = match epistemic {
-        EpistemicStatus::Proven => (
-            Emotion::Neutral,
-            Gesture::Nod,
-            Some("PROVEN".to_string()),
-        ),
+        EpistemicStatus::Proven => (Emotion::Neutral, Gesture::Nod, Some("PROVEN".to_string())),
         EpistemicStatus::Disproven => (
             Emotion::Skeptical,
             Gesture::Shrug,
@@ -244,7 +236,11 @@ mod tests {
         let tl = viseme_timeline("The quick brown fox jumps.");
         let distinct: std::collections::HashSet<char> =
             tl.iter().map(|(_, v)| v.as_char()).collect();
-        assert!(distinct.len() >= 4, "expected viseme variety, got {:?}", distinct);
+        assert!(
+            distinct.len() >= 4,
+            "expected viseme variety, got {:?}",
+            distinct
+        );
     }
 
     #[test]
@@ -257,7 +253,11 @@ mod tests {
     #[test]
     fn test_avatar_never_implies_false_certainty() {
         // The overlay mirrors the governor exactly — this test pins that.
-        for status in [EpistemicStatus::Proven, EpistemicStatus::Disproven, EpistemicStatus::Unknown] {
+        for status in [
+            EpistemicStatus::Proven,
+            EpistemicStatus::Disproven,
+            EpistemicStatus::Unknown,
+        ] {
             let s = derive_avatar(status, Intent::Question, false);
             let expected = format!("{:?}", status).to_uppercase();
             assert_eq!(s.epistemic_overlay.as_deref(), Some(expected.as_str()));
@@ -282,7 +282,10 @@ mod corner_tests {
         // and no viseme is emitted for the swallowed text.
         let tl = viseme_timeline("a [b");
         let text: String = tl.iter().map(|(_, v)| v.as_char()).collect();
-        assert!(!text.contains('B'), "tag chars must not produce visemes, got {text}");
+        assert!(
+            !text.contains('B'),
+            "tag chars must not produce visemes, got {text}"
+        );
         // Stray closer with no opener is kept as ordinary text (documented).
         let tl2 = viseme_timeline("]x");
         assert!(!tl2.is_empty());
@@ -305,9 +308,17 @@ mod corner_tests {
         // While speaking, Listen/Think collapse to Idle so the puppet
         // doesn't look like it's waiting while it talks.
         let s = derive_avatar(EpistemicStatus::Unknown, Intent::Question, true);
-        assert_eq!(s.gesture, Gesture::Idle, "Question/Listen + speaking -> Idle");
+        assert_eq!(
+            s.gesture,
+            Gesture::Idle,
+            "Question/Listen + speaking -> Idle"
+        );
         let s = derive_avatar(EpistemicStatus::Unknown, Intent::Converse, true);
-        assert_eq!(s.gesture, Gesture::Idle, "Converse/Think + speaking -> Idle");
+        assert_eq!(
+            s.gesture,
+            Gesture::Idle,
+            "Converse/Think + speaking -> Idle"
+        );
         // Non-speaking keeps the listening gesture.
         let s = derive_avatar(EpistemicStatus::Unknown, Intent::Question, false);
         assert_eq!(s.gesture, Gesture::Listen);
