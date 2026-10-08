@@ -33,7 +33,7 @@ A `no-vcs` or dirty build is UNKNOWN provenance, never "proven".
 
 | layer | identity | status |
 |---|---|---|
-| source | this repo, commit `df523f91f2a0de92312775a3e64aeba18259aed2` (filled at init) | PROVEN after git init |
+| source | this repo, tag `provenance-baseline` → commit `d71a5b7944e4ae27db320f6fbae29328a096a20f` | PROVEN (immutable tag) |
 | build | `cargo build --release` on the VM | PROVEN (binary carries hash) |
 | deploy (demo) | https://indy-reads-ui-maroonedpilot-8906.vercel.app/voice.html | PROVEN (live, hash-verified Oct 7) |
 | runtime | `GET /health` → compare `commit` | verify per deploy |
