@@ -16,6 +16,14 @@
   window.addEventListener('error', e => log('window.onerror: ' + e.message, 'err'));
   log('boot UA=' + navigator.userAgent.slice(0, 70));
 
+  // ?key= gate (RT-SWEEP-2026-10-08-003): the API requires the inbound key.
+  // Read once from the page URL and append to every API call — never hardcoded.
+  const _inboundKey = new URLSearchParams(location.search).get('key') || '';
+  function withKey(url) {
+    if (!_inboundKey) return url;
+    return url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(_inboundKey);
+  }
+
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const hasSynth = !!window.speechSynthesis;
   const hasGUM = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
@@ -167,7 +175,7 @@
       const next = () => {
         if (myGen !== speakGen) { log('audio-tts superseded', 'warn'); currentAudio = null; resolve(); return; }
         if (i >= chunks.length) { log('audio-tts done'); currentAudio = null; stopVisemes(); resolve(); return; }
-        const a = new Audio('/api/tts?q=' + encodeURIComponent(chunks[i++]));
+        const a = new Audio(withKey('/api/tts?q=' + encodeURIComponent(chunks[i++])));
         currentAudio = a;
         a.onplaying = () => { audioConfirmed = true; };
         a.onended = () => { currentAudio = null; next(); };
@@ -349,7 +357,7 @@
     setOverlay(pf); // instant preface — perceived latency cut
     log('heard: ' + utterance.slice(0, 80));
     try {
-      const res = await fetch('/api/turn', {
+      const res = await fetch(withKey('/api/turn'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, utterance, persona: 'indy', era: 'prime', tone: 'dry' }),
       });

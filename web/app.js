@@ -102,7 +102,15 @@ function setEpistemic(status, detail) {
 // schemes are rejected — the override points at a governor, not at markup.
 const _apiRaw = (new URLSearchParams(location.search).get('api') || '').replace(/\/$/, '');
 const API_BASE = (/^https?:\/\//i.test(_apiRaw) || _apiRaw === '') ? _apiRaw : '';
-function api(path) { return API_BASE + path; }
+// ?key= gate (RT-SWEEP-2026-10-08-003): the API requires the inbound key.
+// Read once from the page URL and append to every API call — never hardcoded.
+// Open the demo with ?key=<router-key> (bookmark it).
+const _inboundKey = new URLSearchParams(location.search).get('key') || '';
+function api(path) {
+  const url = API_BASE + path;
+  if (!_inboundKey) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(_inboundKey);
+}
 
 async function sendTurn(text) {
   if (!text.trim()) return;

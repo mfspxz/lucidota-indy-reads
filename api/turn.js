@@ -12,6 +12,7 @@
 
 const crypto = require('crypto');
 const path = require('path');
+const { requireAuth } = require('./_auth');
 
 const sha256hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
 
@@ -49,6 +50,7 @@ function bundledRouterKey() {
 }
 
 module.exports = async (req, res) => {
+  if (!requireAuth(req, res)) return; // RT-SWEEP-2026-10-08-003: inbound auth gate
   if (req.method !== 'POST') { res.status(405).json({ error: 'POST only' }); return; }
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }

@@ -4,8 +4,10 @@
 // (per function instance, as before — warm instances accumulate turns).
 // No receipt logic in JS; the chain lives in Rust.
 const { getWasmHandles } = require('./turn.js');
+const { requireAuth } = require('./_auth');
 
 module.exports = async (req, res) => {
+  if (!requireAuth(req, res)) return; // RT-SWEEP-2026-10-08-003: inbound auth gate
   let h;
   try {
     h = await getWasmHandles();

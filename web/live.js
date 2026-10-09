@@ -12,6 +12,14 @@
   try { _apiRaw = (new URLSearchParams(location.search).get('api') || '').replace(/\/$/, ''); } catch (e) {}
   // Same rule as app.js: ?api= points at an http(s) governor, nothing else.
   var API_BASE = (/^https?:\/\//i.test(_apiRaw) || _apiRaw === '') ? _apiRaw : '';
+  // ?key= gate (RT-SWEEP-2026-10-08-003): the API requires the inbound key.
+  // Read once from the page URL and append to every API call — never hardcoded.
+  var _inboundKey = '';
+  try { _inboundKey = new URLSearchParams(location.search).get('key') || ''; } catch (e) {}
+  function withKey(url) {
+    if (!_inboundKey) return url;
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(_inboundKey);
+  }
   var playCtx = null, playQueue = [], playing = false, pendingMarks = [];
   var liveBtn = null, statusEl = null;
 
@@ -137,7 +145,7 @@
   // The correction turn: declared explicitly so the governor emits the
   // ClaimRevision receipt and invalidates pending output.
   function sendCorrectionTurn(text, corr) {
-    fetch(API_BASE + '/api/turn', {
+    fetch(withKey(API_BASE + '/api/turn'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ utterance: text, correction_of: corr })
     }).then(function (res) { return res.json(); }).then(function (r) {
@@ -192,7 +200,7 @@
     setStatus('requesting session…');
     var res;
     try {
-      res = await fetch(API_BASE + '/api/alebex/session');
+      res = await fetch(withKey(API_BASE + '/api/alebex/session'));
     } catch (e) { setStatus('gateway unreachable'); return; }
     if (!res.ok) {
       var msg = await res.text();

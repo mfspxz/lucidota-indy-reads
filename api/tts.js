@@ -1,6 +1,8 @@
 // TTS proxy: server-side fetch of translate_tts, returned as audio/mpeg.
 // The browser calls same-origin /api/tts?q=... so no referer/CORS blocking.
+const { requireAuth } = require('./_auth');
 module.exports = async (req, res) => {
+  if (!requireAuth(req, res)) return; // RT-SWEEP-2026-10-08-003: inbound auth gate
   try {
     const q = String((req.query && req.query.q) || '').slice(0, 200);
     if (!q) { res.status(400).send('missing q'); return; }

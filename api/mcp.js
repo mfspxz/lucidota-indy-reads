@@ -10,8 +10,10 @@
 // POST /api/mcp {tool, arguments} -> executes, returns MCP {content, isError}
 
 const { getWasmHandles } = require('./turn.js');
+const { requireAuth } = require('./_auth');
 
 module.exports = async (req, res) => {
+  if (!requireAuth(req, res)) return; // RT-SWEEP-2026-10-08-003: inbound auth gate
   let core;
   try {
     core = await import('../wasm/governor-wasm/shell-core.mjs');
