@@ -270,7 +270,9 @@ async fn require_api_key(
     use std::io::Read as _;
     fn expected_key() -> Option<String> {
         for p in [
-            std::env::var("HOME").ok().map(|h| format!("{}/workspace/keys/ROUTER_KEY", h)),
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{}/workspace/keys/ROUTER_KEY", h)),
             Some("/home/hatch/workspace/keys/ROUTER_KEY".to_string()),
         ]
         .into_iter()
@@ -286,7 +288,10 @@ async fn require_api_key(
                 }
             }
         }
-        std::env::var("ROUTER_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        std::env::var("ROUTER_KEY")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
     fn constant_time_eq(a: &str, b: &str) -> bool {
         let ab = a.as_bytes();
@@ -302,13 +307,7 @@ async fn require_api_key(
     }
     let expected = match expected_key() {
         Some(k) => k,
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "auth not configured",
-            )
-                .into_response()
-        }
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "auth not configured").into_response(),
     };
     let headers = req.headers();
     let mut got: Option<String> = None;
@@ -321,7 +320,10 @@ async fn require_api_key(
     if got.is_none() {
         if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
             let t = auth.trim();
-            if let Some(rest) = t.strip_prefix("Bearer ").or_else(|| t.strip_prefix("bearer ")) {
+            if let Some(rest) = t
+                .strip_prefix("Bearer ")
+                .or_else(|| t.strip_prefix("bearer "))
+            {
                 let k = rest.trim();
                 if !k.is_empty() {
                     got = Some(k.to_string());

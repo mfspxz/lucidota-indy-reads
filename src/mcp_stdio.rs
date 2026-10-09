@@ -28,7 +28,9 @@ mod tests {
 
     #[tokio::test]
     async fn stub_is_explicit_not_silent() {
-        let err = serve_stdio().await.expect_err("stub must not succeed silently");
+        let err = serve_stdio()
+            .await
+            .expect_err("stub must not succeed silently");
         assert!(err.to_string().contains("separate task"));
     }
 }

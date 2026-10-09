@@ -251,8 +251,7 @@ impl GmailConnector {
         }
         let t: Triage =
             serde_json::from_str(&out).map_err(|e| format!("gmail.search: bad CLI JSON: {}", e))?;
-        Ok(t
-            .messages
+        Ok(t.messages
             .unwrap_or_default()
             .into_iter()
             .map(|m| GmailHit {
@@ -312,10 +311,7 @@ impl GmailConnector {
                 true,
             )
         } else {
-            (
-                body,
-                !r.body_text_inline_complete.unwrap_or(true),
-            )
+            (body, !r.body_text_inline_complete.unwrap_or(true))
         };
         Ok(GmailMessage {
             id: r.message_id.or(r.id).unwrap_or_else(|| id.to_string()),

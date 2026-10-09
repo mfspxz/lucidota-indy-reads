@@ -306,9 +306,9 @@ impl OpenAiCompatBackend {
             return None;
         }
         let key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
-        let name = std::env::var("OPENAI_LANE_NAME").unwrap_or_else(|_| "openai-compat".to_string());
-        let model =
-            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        let name =
+            std::env::var("OPENAI_LANE_NAME").unwrap_or_else(|_| "openai-compat".to_string());
+        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
         let config = async_openai::config::OpenAIConfig::new()
             .with_api_base(base)
             .with_api_key(key);
@@ -340,12 +340,16 @@ impl OpenAiCompatBackend {
                     .content(system)
                     .build()
                     .map(ChatCompletionRequestMessage::System)
-                    .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?,
+                    .map_err(|e| {
+                        GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e))
+                    })?,
                 ChatCompletionRequestUserMessageArgs::default()
                     .content(user)
                     .build()
                     .map(ChatCompletionRequestMessage::User)
-                    .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?,
+                    .map_err(|e| {
+                        GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e))
+                    })?,
             ])
             .max_tokens(400u16)
             .temperature(0.7f32)
@@ -363,12 +367,7 @@ impl OpenAiCompatBackend {
                 format!("{}: {}s timeout", self.name, self.timeout_secs),
             )
         })?
-        .map_err(|e| {
-            GenError::new(
-                GenErrorKind::Unavailable,
-                format!("{}: {}", self.name, e),
-            )
-        })?;
+        .map_err(|e| GenError::new(GenErrorKind::Unavailable, format!("{}: {}", self.name, e)))?;
 
         // STRICT CONTRACT (same as RouterBackend): the provider must return
         // the JSON envelope the system prompt demands. jiter does the typed

@@ -10,7 +10,8 @@
 use minijinja::{context, Environment};
 use std::sync::OnceLock;
 
-const USER_TURN_TMPL: &str = "Governor epistemic hint for this turn: {{ hint }}. The user said: {{ utterance }}";
+const USER_TURN_TMPL: &str =
+    "Governor epistemic hint for this turn: {{ hint }}. The user said: {{ utterance }}";
 
 const SYSTEM_WRAPPER_TMPL: &str = r#"{{ persona }}
 

@@ -63,8 +63,10 @@ mod tests {
             .keys()
             .cloned()
             .collect();
-        let expected: BTreeSet<String> =
-            ["reply", "response_style"].iter().map(|s| s.to_string()).collect();
+        let expected: BTreeSet<String> = ["reply", "response_style"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(props, expected);
     }
 
