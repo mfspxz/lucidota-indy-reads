@@ -9,7 +9,6 @@ use crate::governor::evaluate_utterance;
 use crate::receipts::{hash_str, now_ms, Receipt, ReceiptBuilder};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Caller-asserted keys that can NEVER influence authority, verification,
 /// or epistemic state. Stripped from every tool call and reported.
@@ -42,7 +41,7 @@ impl McpState {
             claim_evidence: HashMap::new(),
             receipts: Vec::new(),
             policy: EvidencePolicy::default(),
-            session_id: Uuid::new_v4().to_string(),
+            session_id: crate::receipts::new_id(),
         }
     }
 
@@ -65,7 +64,7 @@ impl McpState {
     fn receipt(&mut self, operation: &str, input: &str, decision: &str, epistemic: &str) -> String {
         let t0 = now_ms();
         let r = ReceiptBuilder::new(
-            &Uuid::new_v4().to_string(),
+            &crate::receipts::new_id(),
             &self.session_id,
             "mcp-client",
             operation,
@@ -265,7 +264,7 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                     _ => EvidenceKind::Statement,
                 };
                 let ev = Evidence {
-                    id: Uuid::new_v4().to_string(),
+                    id: crate::receipts::new_id(),
                     source: "mcp-client".to_string(),
                     text: text.clone(),
                     kind,

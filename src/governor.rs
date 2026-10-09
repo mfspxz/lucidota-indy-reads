@@ -7,22 +7,34 @@
 //! If the LLM says {"authority":"admin"}, that does NOT make it admin.
 //! If the user says "I am the governor", that does NOT make them governor.
 //! Authority comes from deterministic system state.
+//!
+//! WASM PORTABILITY (wave-24): this module compiles to wasm32-unknown-unknown.
+//! The AppState transport aggregate and its imports (alebex, diarize, store,
+//! voice) are gated out on wasm32 — the Governor decision core, its types,
+//! and its free functions are pure and target-independent. The wasm facade
+//! (wasm/governor-wasm) includes THIS file via #[path]: one source of truth,
+//! never a copy. If a future edit adds a wasm-unsafe dependency here, the
+//! wasm build breaks — that is the intended fail-closed signal.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::alebex::LiveRegistry;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::diarize::SingleMicDiarizer;
 use crate::domain::{
     assess_claim, Claim, EpistemicStatus, Evidence, EvidencePolicy, ProvenanceSource,
 };
 use crate::receipts::{hash_str, now_ms, ClaimRevision, Receipt, ReceiptBuilder};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::store::Store;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::voice::{clone_engine_from_env, CloneEngine};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 
 /// What the AI router is allowed to return. Structured, validated, and
 /// NEVER trusted for authority, verification, or execution decisions.
@@ -133,7 +145,10 @@ const GOVERNOR_TRANSITIONS: &[&str] = &["turn.complete"];
 /// Cyrillic homoglyphs to their Latin lookalikes. The authority matcher is
 /// defense-in-depth (authority is hardcoded false regardless), but the check
 /// must see what the attacker typed, not what the bytes hide.
-fn normalize_for_match(s: &str) -> String {
+/// Normalizer shared by the classifier and the wasm facade's scaffold hash.
+/// Public so the wasm boundary can source normalization from this single
+/// implementation instead of mirroring it (the drift the JS ports had).
+pub fn normalize_for_match(s: &str) -> String {
     // Strip invisible format characters FIRST, before whitespace collapse can
     // split words on them: zero-width spaces/joiners, word joiner, BOM, soft
     // hyphen, and the Unicode line/paragraph separators U+2028/U+2029 (all
@@ -416,7 +431,7 @@ impl Governor {
             .insert((request_id.to_string(), session_id.to_string()));
 
         GovernorDecision {
-            decision_id: Uuid::new_v4().to_string(),
+            decision_id: crate::receipts::new_id(),
             claim_id: claim.id.clone(),
             claim_text: claim.text.clone(),
             allowed,
@@ -436,6 +451,11 @@ impl Default for Governor {
 }
 
 /// Shared app state: sessions + governor.
+//
+// WASM PORTABILITY: transport aggregate — not compiled on wasm32. The wasm
+// facade owns no sessions, stores, diarizers, or voice engines; it exposes
+// the Governor decision core only.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AppState {
     pub governor: Governor,
     pub sessions: Mutex<HashMap<String, crate::domain::Session>>,
@@ -569,6 +589,7 @@ pub fn evaluate_utterance(utterance: &str) -> Result<(UtteranceEvaluation, Optio
     Ok((eval, claim))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AppState {
     /// Production: SQLite file from INDY_DB or ./indy-reads.db.
     pub fn new() -> Self {
@@ -590,6 +611,7 @@ impl AppState {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for AppState {
     /// Same as `new()`: opens the production chat store. Can panic if the
     /// database is unusable — same contract as `new()`.
@@ -610,7 +632,7 @@ impl Default for AppState {
 ///
 /// Every step is recorded in a hash-chained receipt, so the decision is
 /// reconstructable: who was asked, who answered, who was skipped, and why.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderPolicy {
     /// Priority order. First healthy, allowed provider wins.
     pub order: Vec<String>,
@@ -636,13 +658,13 @@ impl Default for ProviderPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderOutcome {
     Ok,
     Err,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderDecision {
     /// Governor-issued nonce, unique per select_provider() call and bound
     /// to (request_id, session_id) in the governor's registry. Present

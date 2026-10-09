@@ -5,8 +5,29 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_arch = "wasm32"))]
 use uuid::Uuid;
+
+/// Instance-unique ID. Native: real UUID v4. wasm32-unknown-unknown: the
+/// getrandom js backend needs wasm-bindgen's full externref object protocol,
+/// which the hand-rolled loader does not implement — so on wasm the ID is
+/// `w-<host_ms>-<counter>` (host clock + instance-atomic counter). IDs need
+/// UNIQUENESS, not unpredictability: replay prevention rests on the
+/// consumed-once nonce registry and chain integrity on hashes, never on ID
+/// entropy. Documented, not hidden.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn new_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn new_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CTR: AtomicU64 = AtomicU64::new(1);
+    format!("w-{}-{}", now_ms(), CTR.fetch_add(1, Ordering::Relaxed))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
@@ -65,11 +86,30 @@ pub fn hash_str(s: &str) -> String {
     hex::encode(h.finalize())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// wasm32-unknown-unknown has no OS clock (SystemTime::now panics). The
+/// host supplies time: the JS loader MUST provide the `indy_host_now_ms`
+/// import (Date.now()). Same signature, same units — the clock is an input,
+/// not a secret.
+#[cfg(target_arch = "wasm32")]
+pub fn now_ms() -> u64 {
+    unsafe { indy_host_now_ms() as u64 }
+}
+
+/// Raw host import: the JS loader provides `env.indy_host_now_ms`
+/// (Date.now()). Declared with an explicit wasm import module so the
+/// linker emits an import instead of an undefined-symbol error.
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn indy_host_now_ms() -> f64;
 }
 
 pub struct ReceiptBuilder {
@@ -80,7 +120,7 @@ impl ReceiptBuilder {
     pub fn new(request_id: &str, session_id: &str, actor: &str, operation: &str) -> Self {
         Self {
             receipt: Receipt {
-                receipt_id: Uuid::new_v4().to_string(),
+                receipt_id: new_id(),
                 request_id: request_id.to_string(),
                 session_id: session_id.to_string(),
                 timestamp_ms: now_ms(),

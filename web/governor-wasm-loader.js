@@ -1,128 +1,169 @@
-// governor-wasm-loader.js — hand-rolled browser loader for governor_wasm.wasm.
+// governor-wasm-loader.js — browser loader for governor_wasm.wasm.
 //
-// The Rust governor (wasm/governor-wasm, pure deterministic logic, no
-// axum/tokio) compiled to wasm32-unknown-unknown. No bundler, no
-// wasm-bindgen CLI: this implements the wasm-bindgen string convention by
-// hand — f(retptr, ptr, len) with retptr -> [out_ptr:u32, out_len:u32],
-// allocation via the exported __wbindgen_malloc/__wbindgen_free.
-//
-// Loader quirks (from the spike, /tmp/gw-load.cjs):
-//   - export names may be mangled: resolve by prefix match
-//     (exact name OR name starting with prefix + "_")
-//   - __wbindgen_malloc takes (size, align)
-//   - do NOT free input pointers (only out + retptr)
-//   - stub __wbindgen_describe as a no-op
-//   - the module's own table is not exported: give the externref-xform
-//     imports a private table (pure string functions never touch it)
+// Wave-24: loads the wasm module built from the REAL Rust governor sources
+// (wasm/governor-wasm). Hand-rolled wasm-bindgen string convention
+// (retptr -> [out_ptr, out_len]), same as the node loader.
 //
 // Exposes: window.GovernorWASM = {
-//   ready: Promise<boolean>,          // false on any failure — page works as before
-//   verdict(inputJson: string) -> object|null,   // throws if not ready
-//   normalize(s: string) -> string|null,         // throws if not ready
+//   ready: Promise<boolean>,   // resolves true when the module is live
+//   verdict(inputJson: string) // -> GovernorDecision JSON (shadow mode)
 // }
-// Shadow mode only: the page never lets this override the server verdict.
+// voice.js (shadow mode) calls verdict() and reads v.epistemic_status,
+// v.authority_rejected, v.reason. authority_rejected is derived from the
+// verdict reason — the Rust decision carries no such flag (the verdict
+// reason IS the authority record).
+//
+// Shadow mode: the module re-verdicts each reply client-side as an
+// INDEPENDENT second opinion. It NEVER overrides the server verdict.
+// If the module fails to load, the page works exactly as before.
+
 (function () {
   'use strict';
-  var api = {
-    ready: null,
-    verdict: function () { throw new Error('governor wasm not ready'); },
-    normalize: function () { throw new Error('governor wasm not ready'); },
-  };
-  if (typeof window !== 'undefined') window.GovernorWASM = api;
-  else if (typeof globalThis !== 'undefined') globalThis.GovernorWASM = api;
 
-  function resolveByPrefix(names, prefix) {
-    for (var i = 0; i < names.length; i++) {
-      var n = names[i];
-      if (n === prefix || n.indexOf(prefix + '_') === 0) return n;
+  var readyResolve;
+  var ready = new Promise(function (res) { readyResolve = res; });
+  var gov = null; // { decide(inputJson) -> object }
+
+  function fail() { try { readyResolve(false); } catch (e) {} }
+
+  function boot(bytes) {
+    var memoryU8, memoryU32;
+    function readStr(ptr, len) {
+      return new TextDecoder().decode(memoryU8().subarray(ptr, ptr + len));
     }
-    return null;
-  }
-
-  api.ready = (async function () {
-    try {
-      // Served gzipped (the 157KB raw module blows the deploy tool's
-      // 128KB single-argument limit); gunzip in-browser.
-      var resp = await fetch('governor_wasm.wasm.gz');
-      if (!resp || !resp.ok || !resp.body) return false;
-      var bytes = await new Response(
-        resp.body.pipeThrough(new DecompressionStream('gzip'))
-      ).arrayBuffer();
-      if (!bytes || bytes.byteLength < 1000) return false;
-      var extTable;
-      try {
-        extTable = new WebAssembly.Table({ initial: 4, element: 'externref' });
-      } catch (e) { return false; }
-      var imports = {
-        __wbindgen_placeholder__: {
-          __wbindgen_describe: function () { /* descriptor protocol; unused */ },
+    var imports = {
+      env: { indy_host_now_ms: function () { return Date.now(); } },
+      __wbindgen_placeholder__: {
+        __wbindgen_describe: function () {},
+        __wbg___wbindgen_throw_41e9ee4f547fc59a: function (ptr, len) {
+          throw new Error('governor wasm: ' + readStr(ptr, len));
         },
-        __wbindgen_externref_xform__: {
-          __wbindgen_externref_table_grow: function (d) { return extTable.grow(d); },
-          __wbindgen_externref_table_set_null: function (idx) { extTable.set(idx, undefined); },
-        },
-      };
-      var inst = await WebAssembly.instantiate(bytes, imports);
-      var ex = inst.instance.exports;
+      },
+      __wbindgen_externref_xform__: {
+        __wbindgen_externref_table_set_null: function () {},
+        __wbindgen_externref_table_grow: function () { return 0; },
+      },
+    };
+    return WebAssembly.instantiate(bytes, imports).then(function (mod) {
+      var ex = mod.instance.exports;
       var names = Object.keys(ex);
-      var mallocName = resolveByPrefix(names, '__wbindgen_malloc');
-      var freeName = resolveByPrefix(names, '__wbindgen_free');
-      if (!mallocName || !freeName || !ex.memory) return false;
-      var malloc = ex[mallocName], free = ex[freeName];
-      var memU8 = function () { return new Uint8Array(ex.memory.buffer); };
-      var memU32 = function () { return new Uint32Array(ex.memory.buffer); };
-      var readStr = function (ptr, len) {
-        return new TextDecoder().decode(memU8().subarray(ptr, ptr + len));
-      };
-      var findFn = function (prefix) {
-        var n = resolveByPrefix(names, prefix);
-        return n && typeof ex[n] === 'function' ? ex[n] : null;
-      };
-      var verdictFn = findFn('verdict');
-      var normalizeFn = findFn('normalize');
-      if (!verdictFn || !normalizeFn) return false;
-
-      // Smoke test: normalize must round-trip before we trust the module.
-      var smoke;
-      try {
-        smoke = (function () {
-          var data = new TextEncoder().encode('smoke');
-          var ptr = malloc(data.length, 1);
-          memU8().set(data, ptr);
-          var retptr = malloc(8, 1);
-          normalizeFn(retptr, ptr, data.length);
-          var u32 = memU32();
-          var out = readStr(u32[retptr / 4], u32[retptr / 4 + 1]);
-          free(u32[retptr / 4], u32[retptr / 4 + 1], 1);
-          free(retptr, 8, 1);
-          return out;
-        })();
-      } catch (e) { return false; }
-      if (smoke !== 'smoke') return false;
-
+      memoryU8 = function () { return new Uint8Array(ex.memory.buffer); };
+      memoryU32 = function () { return new Uint32Array(ex.memory.buffer); };
+      var malloc = ex.__wbindgen_malloc, free = ex.__wbindgen_free;
+      if (typeof malloc !== 'function' || typeof free !== 'function' || !ex.memory) {
+        throw new Error('governor wasm: missing malloc/free/memory');
+      }
+      function findFn(prefix) {
+        for (var i = 0; i < names.length; i++) {
+          var n = names[i];
+          if ((n === prefix || n.indexOf(prefix + '_') === 0) && typeof ex[n] === 'function') return ex[n];
+        }
+        return null;
+      }
+      // f(retptr, ptr, len) -> JSON string
       function callStr(fn, input) {
         var data = new TextEncoder().encode(input);
         var ptr = malloc(data.length, 1);
-        memU8().set(data, ptr);
+        memoryU8().set(data, ptr);
         var retptr = malloc(8, 1);
-        fn(retptr, ptr, data.length);
-        var u32 = memU32();
-        var outPtr = u32[retptr / 4], outLen = u32[retptr / 4 + 1];
-        var out = readStr(outPtr, outLen);
-        free(outPtr, outLen, 1);
-        free(retptr, 8, 1);
-        // NOTE: input pointer intentionally NOT freed (spike quirk).
-        return out;
+        try {
+          fn(retptr, ptr, data.length);
+          var u32 = memoryU32();
+          var outPtr = u32[retptr / 4], outLen = u32[retptr / 4 + 1];
+          var out = readStr(outPtr, outLen);
+          free(outPtr, outLen, 1);
+          return out;
+        } finally {
+          free(retptr, 8, 1);
+        }
       }
-      api.verdict = function (inputJson) {
-        return JSON.parse(callStr(verdictFn, inputJson));
+      var shimNew = findFn('wasmgovernor_new');
+      var shimFree = findFn('__wbg_wasmgovernor_free');
+      var shimDecide = findFn('wasmgovernor_decide');
+      if (!shimNew || !shimFree || !shimDecide) {
+        throw new Error('governor wasm: missing governor shims');
+      }
+      // f(retptr, self_ptr, ptr, len) -> JSON string
+      function callSelf(fn, selfPtr, input) {
+        var data = new TextEncoder().encode(input);
+        var ptr = malloc(data.length, 1);
+        memoryU8().set(data, ptr);
+        var retptr = malloc(8, 1);
+        try {
+          fn(retptr, selfPtr, ptr, data.length);
+          var u32 = memoryU32();
+          var outPtr = u32[retptr / 4], outLen = u32[retptr / 4 + 1];
+          var out = readStr(outPtr, outLen);
+          free(outPtr, outLen, 1);
+          return out;
+        } finally {
+          free(retptr, 8, 1);
+        }
+      }
+      var selfPtr = shimNew();
+      gov = {
+        decide: function (input) { return JSON.parse(callSelf(shimDecide, selfPtr, JSON.stringify(input))); },
       };
-      api.normalize = function (s) {
-        return callStr(normalizeFn, s);
-      };
-      return true;
+      readyResolve(true);
+    }).catch(function (e) {
+      try { console.warn('[wasm-governor] load failed:', e); } catch (x) {}
+      fail();
+    });
+  }
+
+  // verdict(inputJson): shadow-mode entry. Accepts the voice.js shape
+  // {request_id, session_id, utterance, proposal, evidence} and runs the
+  // REAL Rust decide pipeline. Returns the GovernorDecision JSON plus
+  // the derived authority_rejected flag voice.js reads.
+  function verdict(inputJson) {
+    if (!gov) return { error: 'wasm governor not loaded' };
+    var input;
+    try { input = JSON.parse(inputJson); }
+    catch (e) { return { error: 'bad input json' }; }
+    var utterance = String(input.utterance || '');
+    var d;
+    try {
+      d = gov.decide({
+        request_id: String(input.request_id || 'w-' + Date.now().toString(36)),
+        session_id: String(input.session_id || 's-wasm'),
+        utterance: utterance,
+        proposal: {
+          intent: 'converse',
+          claim: null, hypothesis: null,
+          requested_action: null,
+          response_style: 'conversational',
+        },
+        evidence: Array.isArray(input.evidence) ? input.evidence : [],
+      });
     } catch (e) {
-      return false;
+      return { error: 'governor throw: ' + String((e && e.message) || e).slice(0, 80) };
     }
-  })();
+    if (d && d.error) return { error: d.error };
+    d.authority_rejected = /authority REJECTED/.test(d.reason || '');
+    return d;
+  }
+
+  var api = { ready: ready, verdict: verdict };
+  if (typeof window !== 'undefined') window.GovernorWASM = api;
+  else if (typeof globalThis !== 'undefined') globalThis.GovernorWASM = api;
+
+  // governor_wasm.wasm.gz sits next to this loader; gunzip in-page.
+  fetch('governor_wasm.wasm.gz')
+    .then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.arrayBuffer();
+    })
+    .then(function (buf) {
+      if (typeof DecompressionStream !== 'undefined') {
+        var ds = new DecompressionStream('gzip');
+        var stream = new Blob([buf]).stream().pipeThrough(ds);
+        return new Response(stream).arrayBuffer();
+      }
+      return buf; // already plain wasm
+    })
+    .then(function (buf) { boot(new Uint8Array(buf)); })
+    .catch(function (e) {
+      try { console.warn('[wasm-governor] fetch failed:', e); } catch (x) {}
+      fail();
+    });
 })();

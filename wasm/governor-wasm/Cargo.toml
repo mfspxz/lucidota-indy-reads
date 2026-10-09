@@ -1,8 +1,8 @@
 [package]
 name = "governor-wasm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Spike: pure deterministic Indy_Reads governor logic compiled to wasm32-unknown-unknown. No axum/tokio/rusqlite/reqwest — those stay server-side."
+description = "Indy_Reads governor as a WebAssembly module, built from the REAL sources (src/governor.rs, src/domain.rs, src/receipts.rs) via #[path] includes — never a copy. Wave-24: the JS ports become thin shells over this module."
 
 [lib]
 crate-type = ["cdylib"]
@@ -16,6 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 hex = "0.4"
+# NOTE: no uuid/getrandom — IDs come from receipts::new_id(), which is
+# UUID v4 natively and host-clock+counter on wasm32 (documented there).
 
 [profile.release]
 opt-level = "s"

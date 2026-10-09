@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Ternary epistemic status. UNKNOWN is a valid result, not a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -40,7 +39,7 @@ pub struct Claim {
 impl Claim {
     pub fn new(text: impl Into<String>, provenance: ProvenanceSource) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: crate::receipts::new_id(),
             text: text.into(),
             status: EpistemicStatus::Unknown,
             provenance,
@@ -154,7 +153,7 @@ pub struct Session {
 impl Session {
     pub fn new() -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: crate::receipts::new_id(),
             claims: HashMap::new(),
             evidence: HashMap::new(),
             turns: 0,
@@ -184,7 +183,7 @@ mod tests {
 
     fn ev(status: EvidenceStatus) -> Evidence {
         Evidence {
-            id: Uuid::new_v4().to_string(),
+            id: crate::receipts::new_id(),
             source: "test".into(),
             text: "test".into(),
             kind: EvidenceKind::Report,
@@ -291,7 +290,7 @@ mod corner_tests {
 
     fn ev(status: EvidenceStatus) -> Evidence {
         Evidence {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: crate::receipts::new_id(),
             source: "test".into(),
             text: "test".into(),
             kind: EvidenceKind::Report,
