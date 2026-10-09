@@ -761,6 +761,36 @@ async fn turn(
             "user",
             t_gov_done,
         );
+        // P1 correction memory (rebuild 2026-10-08): assertions, hypotheses,
+        // and CORRECTIONS persist to SQLite — the durable record of what he
+        // told us and what he corrected. UNVERIFIED at intake ("recording is
+        // not believing"); adjudication is a separate step. This is what
+        // makes the continuity note's evidence count real.
+        {
+            use indy_reads::governor::Intent as GovIntent;
+            let now = t_gov_done;
+            if intent == GovIntent::ClaimAssertion {
+                let _ = store.record_evidence(
+                    &format!("{}-ev", request_id),
+                    Some(&decision.claim_id),
+                    &session_id,
+                    &utterance,
+                    "statement",
+                    "UNVERIFIED",
+                    "user",
+                    false,
+                    now,
+                );
+            } else if intent == GovIntent::HypothesisAssertion {
+                let _ = store.record_hypothesis(
+                    &format!("{}-hy", request_id),
+                    Some(&decision.claim_id),
+                    &session_id,
+                    &utterance,
+                    now,
+                );
+            }
+        }
         let r = &decision.receipt;
         let _ = store.record_receipt(
             &r.receipt_id,
@@ -903,6 +933,28 @@ async fn turn(
         )
     });
     let speech_interrupted = correction.is_some();
+
+    // P1 correction memory (rebuild 2026-10-08): a user correction is
+    // persisted as evidence (kind "correction", UNVERIFIED at intake) — the
+    // durable record of what he corrected and what it became. The
+    // revision_receipt above hash-chains the invalidation; this stores it.
+    if let Some(c) = &correction {
+        let store = state.store.lock().unwrap();
+        let _ = store.record_evidence(
+            &format!("{}-corr", request_id),
+            Some(&decision.claim_id),
+            &session_id,
+            &format!(
+                "CORRECTION of '{}': '{}' -> '{}'",
+                c.claim, c.old_value, c.new_value
+            ),
+            "correction",
+            "UNVERIFIED",
+            "user",
+            false,
+            now_ms(),
+        );
+    }
 
     // Theater: real events become staged presentation. Fast lane never
     // waited for the slow lane; these cues choreograph what already happened.
