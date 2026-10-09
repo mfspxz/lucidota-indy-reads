@@ -1,0 +1,51 @@
+---
+source: src/tool_schemas.rs
+assertion_line: 95
+expression: def
+---
+{
+  "description": "Submit a turn proposal to the Indy_Reads governor. The governor validates, sanitizes authority-bearing fields, and decides. Output is a proposal, never an action.",
+  "name": "submit_proposal",
+  "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The fields an LLM tool call may set on a proposal. Authority-bearing\nfields (`authority`, `verified`, `execute`, `claim_status`) are\ndeliberately absent — the governor strips and records them; they are\nnot part of any tool contract.",
+    "properties": {
+      "claim": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "hypothesis": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "intent": {
+        "type": "string"
+      },
+      "reply": {
+        "type": "string"
+      },
+      "requested_action": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "response_style": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "intent",
+      "reply"
+    ],
+    "title": "ProposalTool",
+    "type": "object"
+  }
+}

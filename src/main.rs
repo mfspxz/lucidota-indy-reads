@@ -15,6 +15,10 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+    tracing::info!(
+        "indy-reads starting at {}",
+        indy_reads::time_util::now_rfc3339()
+    );
     let state = Arc::new(AppState::new());
     let app = api::router(state);
     let port: u16 = std::env::var("PORT")

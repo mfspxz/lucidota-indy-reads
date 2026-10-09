@@ -38,7 +38,8 @@ pub enum GenErrorKind {
     HttpStatus(u16),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{kind:?}: {msg}")]
 pub struct GenError {
     pub kind: GenErrorKind,
     pub msg: String,
@@ -52,14 +53,6 @@ impl GenError {
         }
     }
 }
-
-impl std::fmt::Display for GenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}: {}", self.kind, self.msg)
-    }
-}
-
-impl std::error::Error for GenError {}
 
 /// A provider backend. probe() is cheap and network-free (key present,
 /// URL configured) — it is what the governor's failover loop consults.
@@ -276,6 +269,150 @@ impl Backend for RouterBackend {
     }
 }
 
+/// An OpenAI-API-compatible provider lane backed by `async-openai`
+/// (crate-atlas ADOPT).
+///
+/// Sits ALONGSIDE the existing `RouterBackend` lanes — the
+/// ai-router/openrouter/nvidia wiring is untouched. The base URL is fully
+/// overridable, so any OpenAI-compatible endpoint (Groq, DeepSeek, Ollama,
+/// vLLM, a local gateway) becomes a lane: one client, many backends, the
+/// $0-fleet strategy.
+///
+/// Enabled only when `OPENAI_BASE_URL` is set. Key from `OPENAI_API_KEY`
+/// (may be empty for keyless local endpoints). Lane name from
+/// `OPENAI_LANE_NAME` (default `"openai-compat"`) so the governor's
+/// failover ordering treats it as one more candidate.
+///
+/// Token discipline (tiktoken-rs): the system prompt is truncated to
+/// `SYSTEM_BUDGET_TOKENS` cl100k tokens before send. Prompt templates
+/// (minijinja) render the user turn — template sources are in-binary
+/// consts, never LLM output. Response parsing (jiter): typed parse of the
+/// JSON envelope; truncation or garbage is Malformed, never spoken.
+pub struct OpenAiCompatBackend {
+    name: String,
+    model: String,
+    timeout_secs: u64,
+    client: async_openai::Client<async_openai::config::OpenAIConfig>,
+}
+
+/// cl100k budget for the system prompt on this lane.
+const SYSTEM_BUDGET_TOKENS: usize = 3000;
+
+impl OpenAiCompatBackend {
+    /// None unless `OPENAI_BASE_URL` is set and non-empty.
+    pub fn from_env() -> Option<Self> {
+        let base = std::env::var("OPENAI_BASE_URL").ok()?;
+        if base.trim().is_empty() {
+            return None;
+        }
+        let key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+        let name = std::env::var("OPENAI_LANE_NAME").unwrap_or_else(|_| "openai-compat".to_string());
+        let model =
+            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        let config = async_openai::config::OpenAIConfig::new()
+            .with_api_base(base)
+            .with_api_key(key);
+        Some(Self {
+            name,
+            model,
+            timeout_secs: 30,
+            client: async_openai::Client::with_config(config),
+        })
+    }
+
+    async fn generate_inner(
+        &self,
+        utterance: &str,
+        epistemic_hint: &str,
+        system_prompt: &str,
+    ) -> Result<AiReply, GenError> {
+        use async_openai::types::chat::{
+            ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+            ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
+        };
+
+        let system = indy_reads::tokens::truncate_to_budget(system_prompt, SYSTEM_BUDGET_TOKENS);
+        let user = indy_reads::prompts::render_user_turn(epistemic_hint, utterance);
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(&self.model)
+            .messages([
+                ChatCompletionRequestSystemMessageArgs::default()
+                    .content(system)
+                    .build()
+                    .map(ChatCompletionRequestMessage::System)
+                    .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?,
+                ChatCompletionRequestUserMessageArgs::default()
+                    .content(user)
+                    .build()
+                    .map(ChatCompletionRequestMessage::User)
+                    .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?,
+            ])
+            .max_tokens(400u16)
+            .temperature(0.7f32)
+            .build()
+            .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?;
+
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(self.timeout_secs),
+            self.client.chat().create(request),
+        )
+        .await
+        .map_err(|_| {
+            GenError::new(
+                GenErrorKind::Timeout,
+                format!("{}: {}s timeout", self.name, self.timeout_secs),
+            )
+        })?
+        .map_err(|e| {
+            GenError::new(
+                GenErrorKind::Unavailable,
+                format!("{}: {}", self.name, e),
+            )
+        })?;
+
+        // STRICT CONTRACT (same as RouterBackend): the provider must return
+        // the JSON envelope the system prompt demands. jiter does the typed
+        // parse; anything else is Malformed and the governor fails over.
+        let text = resp
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
+        let json_str = extract_json(&text).ok_or_else(|| {
+            GenError::new(
+                GenErrorKind::Malformed,
+                format!("{}: no JSON envelope", self.name),
+            )
+        })?;
+        let mut reply: AiReply = jiter::serde::from_str(&json_str)
+            .map_err(|e| GenError::new(GenErrorKind::Malformed, format!("{}: {}", self.name, e)))?;
+        if reply.reply.is_empty() {
+            reply.reply = text;
+        }
+        Ok(reply)
+    }
+}
+
+impl Backend for OpenAiCompatBackend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn probe(&self) -> ProviderOutcome {
+        // from_env() only returns Some when the base URL is configured.
+        ProviderOutcome::Ok
+    }
+
+    fn generate<'a>(
+        &'a self,
+        utterance: &'a str,
+        epistemic_hint: &'a str,
+        system_prompt: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<AiReply, GenError>> + Send + 'a>> {
+        Box::pin(self.generate_inner(utterance, epistemic_hint, system_prompt))
+    }
+}
+
 /// The outcome of one governed turn: the reply plus the provider trail.
 /// Receipts live in the governor's hash-chained stream (the permanent
 /// record); this struct is the in-flight summary.
@@ -335,6 +472,14 @@ impl AiClient {
             let url = std::env::var(url_var).unwrap_or_else(|_| url_default.to_string());
             backends.push(Arc::new(RouterBackend::new(name, url, key, model.clone())));
             order.push(name.to_string());
+        }
+        // async-openai lane (atlas ADOPT): any OpenAI-compatible endpoint via
+        // OPENAI_BASE_URL. Added alongside the RouterBackend lanes above —
+        // nothing about the ai-router wiring changes. Key-gated the same way:
+        // no OPENAI_BASE_URL, no lane.
+        if let Some(backend) = OpenAiCompatBackend::from_env() {
+            order.push(backend.name().to_string());
+            backends.push(Arc::new(backend));
         }
         let forbidden: Vec<String> = std::env::var("INDY_FORBIDDEN_PROVIDERS")
             .unwrap_or_default()
@@ -396,7 +541,17 @@ impl AiClient {
     // The 8 arguments are the turn context (utterance, hints, ids, governor,
     // advisory request). Bundling them into a struct would churn the C4
     // control path for no behavioral gain; the signature is stable.
+    //
+    // Tracing: #[instrument] (not a manual SpanGuard — the guard is !Send
+    // and would break axum's Handler bound on the /api/turn route).
+    // One span per governed turn; the provider trail is observable in
+    // structured logs alongside the hash-chained receipts.
     #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(
+        name = "governed_turn",
+        skip(self, governor, utterance, epistemic_hint, requested),
+        fields(request_id = %request_id, session_id = %session_id, persona = %persona)
+    )]
     pub async fn interpret_governed(
         &self,
         utterance: &str,

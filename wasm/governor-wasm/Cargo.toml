@@ -19,6 +19,13 @@ hex = "0.4"
 # NOTE: no uuid/getrandom — IDs come from receipts::new_id(), which is
 # UUID v4 natively and host-clock+counter on wasm32 (documented there).
 
+# Host-test-only deps (wave-36): the #[path]-included parent sources use
+# uuid + rusqlite under #[cfg(not(target_arch = "wasm32"))]. Target-gated
+# so the wasm32 build graph is untouched.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 [profile.release]
 opt-level = "s"
 lto = true

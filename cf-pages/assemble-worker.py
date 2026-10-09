@@ -7,7 +7,10 @@ SRC = "/home/hatch/workspace/indy-reads/cf-pages/functions/api"
 OUT = "/home/hatch/workspace/indy-reads/cf-pages/worker.js"
 
 HANDLERS = [
-    ("turn", "turn.js"),
+    # ("turn", "turn.js") REMOVED 2026-10-08: the hand-ported turn.js was a
+    # stale second truth source (demo-only behavior not in the Rust core).
+    # /api/turn now routes through the wasm governor (../wasm/governor-wasm/)
+    # in worker.js — the REAL Rust src/governor.rs compiled to wasm32.
     ("health", "health.js"),
     ("receipts", "receipts.js"),
     ("mcp", "mcp.js"),

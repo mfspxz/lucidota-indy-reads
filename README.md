@@ -65,7 +65,7 @@ call and reported**. There is no tool that sets claim state —
 ## Tests
 
 ```bash
-cargo test   # 25 tests: 16 governor/domain + 9 MCP adversarial
+cargo test   # 203 tests: 168 lib + 35 integration (equiv_turn_paths, governor_adversarial, bins) — all green as of 2026-10-08
 ```
 
 Adversarial coverage: authority impersonation, forged epistemic state via
@@ -99,9 +99,10 @@ Law: similarity -> candidate edge -> verification -> graph. Never similarity -> 
 
 ## Cloud
 
-`cloudflare/`: wrangler.toml (D1 + Vectorize + R2 bindings, unprovisioned)
-and d1-schema.sql (mirrors local SQLite + graph tables). Discovery 2026-10-07:
-no Indy_Reads D1 exists yet (Cute City D1 is a separate project).
+`cloudflare/`: wrangler.toml (D1 + Vectorize + R2 bindings) and d1-schema.sql
+(mirrors local SQLite + graph tables). D1 provisioned 2026-10-08 (was:
+"unprovisioned / no Indy_Reads D1 exists yet" as of 2026-10-07). Wiring of
+worker.js/deploy.py to D1: in progress, see rebuild repair log 2026-10-08.
 Cloudflare first, Vercel second (UI/emergency demo only).
 
 ## Machine notes (2026-10-07)

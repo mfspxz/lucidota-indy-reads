@@ -8,20 +8,31 @@
 //!   groups by request_id, reconstructs each chain, verifies linkage.
 //!   Prints a verdict JSON to stdout. Exit 0 = VERIFIED, 1 = FAILED.
 
+use clap::Parser;
 use indy_reads::governor::{reconstruct_chain, verify_chain_linkage};
 use indy_reads::receipts::Receipt;
 use std::collections::BTreeMap;
 use std::io::Read;
+
+/// Verify a receipt stream's hash-chain integrity using the library's own
+/// verifier (no reimplemented crypto logic here — the point is that the
+/// runtime's receipts check out under the same rules the unit tests enforce).
+#[derive(Parser, Debug)]
+#[command(name = "indy-verify", about = "Verify Indy_Reads receipt hash chains")]
+struct Args {
+    /// JSON file with an array of Receipt objects (stdin if omitted).
+    input: Option<String>,
+}
 
 fn is_hex64(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let raw = if args.len() > 1 {
-        std::fs::read_to_string(&args[1]).unwrap_or_else(|e| {
-            eprintln!("cannot read {}: {}", args[1], e);
+    let args = Args::parse();
+    let raw = if let Some(path) = args.input.as_deref() {
+        std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {}", path, e);
             std::process::exit(2);
         })
     } else {

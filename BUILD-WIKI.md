@@ -1,5 +1,10 @@
 # Indy_Reads — Forensic Build Archaeology (2026-10-07, ~14:40–16:25 PDT)
 
+> CORRECTION 2026-10-08: a git repository now exists in this directory
+> (history starts at wave-33; `git log` is the record from here on). The
+> "no git repository" finding below was accurate when written on 2026-10-07
+> and is preserved as archaeology — do not "fix" it into the past.
+
 **Evidence grading used throughout:** PROVEN (verified by test/deployment/output) ·
 OBSERVED (seen in logs/files, not independently re-verified) · INFERRED (reconstructed
 from consistent evidence) · UNKNOWN (cannot be established).

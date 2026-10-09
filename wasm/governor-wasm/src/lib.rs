@@ -40,6 +40,30 @@ mod governor;
 #[path = "../../../src/mcp.rs"]
 mod mcp;
 
+// Host-test support (wave-36): the #[path]-included parent sources reference
+// crate::alebex/diarize/store/voice/gmail under
+// #[cfg(not(target_arch = "wasm32"))]. Those modules live in the parent
+// binary crate, not here. On wasm32 the gates exclude every one of these,
+// so the .wasm build is untouched (byte-identity is the regression anchor).
+// On host `cargo test` we include the real gmail module (std-only) plus
+// minimal type-checker shims for the transport aggregates (AppState is never
+// constructed by tests; the shims are never exercised).
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../../../src/gmail.rs"]
+mod gmail;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "shims/alebex.rs"]
+mod alebex;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "shims/diarize.rs"]
+mod diarize;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "shims/store.rs"]
+mod store;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "shims/voice.rs"]
+mod voice;
+
 use governor::{
     classify_intent as rs_classify_intent, claims_authority as rs_claims_authority,
     normalize_for_match, validate_reply as rs_validate_reply, AiProposal, Governor,

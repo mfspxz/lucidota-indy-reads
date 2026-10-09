@@ -141,6 +141,48 @@ pub fn strip_forbidden(args: &mut Value) -> Vec<String> {
 
 // ---------- tools ----------
 
+// ---------- tools ----------
+
+// Gmail tools shell out to the host `hatch_gws_cli` binary — unavailable in
+// the wasm32 sandbox (browser / worker). They are host-only: the wasm build
+// must neither advertise nor implement tools it cannot run.
+//
+// The two cfg'd copies below are deliberately NOT deduplicated: the wasm32
+// copy is character-identical to the pre-gmail tree, which keeps the .wasm
+// build byte-identical (wave-36 regression anchor). Deduplicating through a
+// macro or a shared vec changes codegen.
+
+#[cfg(target_arch = "wasm32")]
+pub fn tool_descriptors() -> Value {
+    let d = |name: &str, desc: &str, required: &[&str]| {
+        let mut props = serde_json::Map::new();
+        for r in required {
+            props.insert(r.to_string(), json!({"type": "string"}));
+        }
+        // allow optional extras without enumerating every one
+        json!({
+            "name": name,
+            "description": desc,
+            "inputSchema": {"type": "object", "properties": props, "required": required}
+        })
+    };
+    json!([
+        d("claim.create", "Create a claim. Status always starts UNKNOWN; the governor derives it from evidence.", &["text"]),
+        d("claim.get", "Fetch a claim and its current epistemic state.", &["claim_id"]),
+        d("claim.evaluate", "Derive the claim's epistemic state from evidence under the configured policy. Caller cannot set state directly.", &["claim_id"]),
+        d("evidence.add", "Record evidence (always UNVERIFIED at intake). Optionally link to a claim.", &["text"]),
+        d("evidence.get", "Fetch one evidence item.", &["evidence_id"]),
+        d("evidence.list", "List evidence, optionally filtered by claim.", &[]),
+        d("evidence.adjudicate", "Record a verification verdict with basis. Receipted. Demo stand-in for an external verification pipeline; capability-gated in production. Never changes claim state by itself.", &["evidence_id", "verdict", "basis"]),
+        d("epistemic.get", "Get a claim's epistemic state plus the policy that governs it.", &["claim_id"]),
+        d("receipt.get", "Fetch one receipt by ID.", &["receipt_id"]),
+        d("receipt.list", "List recent receipts.", &[]),
+        d("governor.evaluate", "Run an utterance through the same deterministic pipeline as voice: classify, derive epistemics, receipt, respond.", &["utterance"]),
+        d("system.health", "Server health and counters.", &[]),
+    ])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tool_descriptors() -> Value {
     let d = |name: &str, desc: &str, required: &[&str]| {
         let mut props = serde_json::Map::new();
@@ -411,6 +453,9 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                 json!({"status": "ok", "service": "indy-mcp", "claims": state.claims.len(), "evidence_items": state.evidence.len(), "receipts": state.receipts.len(), "policy_id": state.policy.policy_id}),
                 None,
             )),
+            // Host-only: shells out to the `hatch_gws_cli` binary, which does
+            // not exist in the wasm32 sandbox. Gated out there (wave-36).
+            #[cfg(not(target_arch = "wasm32"))]
             "gmail.search" => {
                 let query = get_str(&args, "query")?;
                 let max = args.get("max").and_then(|v| v.as_u64()).map(|n| n as u32);
@@ -435,6 +480,7 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                     None,
                 ))
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "gmail.read" => {
                 let id = get_str(&args, "message_id")?;
                 let conn = crate::gmail::GmailConnector::new();

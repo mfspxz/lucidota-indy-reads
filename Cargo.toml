@@ -18,6 +18,19 @@ hex = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
+thiserror = "2"
+anyhow = "1.0.104"
+async-openai = { version = "0.42.1", default-features = false, features = ["chat-completion", "native-tls"] }
+schemars = "1"
+tiktoken-rs = "0.12.1"
+minijinja = "3.0.0"
+jiter = { version = "0.17.0", features = ["serde"] }
+jiff = "0.2.38"
+rmcp = { version = "3.5.1", features = ["transport-io"] }
+clap = { version = "4.6.7", features = ["derive"] }
 
 [dev-dependencies]
+insta = { version = "1.49.0", features = ["json"] }
+rstest = "0.27.0"
+tempfile = "3.27.0"
 tokio-test = "0.4"

@@ -1,10 +1,15 @@
 # js_port_equivalence — NIH-FIND-5 harness
 
 Behavioral equivalence for the hand-written JS governor ports
-(`api/turn.js`, `cf-pages/functions/api/turn.js` → assembled
-`cf-pages/worker.js`, `api/mcp.js`, `cf-pages/functions/api/mcp.js`)
-against the Rust governor. Closes the NIH-FIND-5 gap: these ports were not
-covered by the 169/169 Rust equivalence harness.
+(`api/turn.js` → assembled `cf-pages/worker.js`, `api/mcp.js`,
+`cf-pages/functions/api/mcp.js`) against the Rust governor. Closes the
+NIH-FIND-5 gap: these ports were not covered by the 169/169 Rust
+equivalence harness.
+
+> 2026-10-08: `cf-pages/functions/api/turn.js` was DELETED (stale second
+> truth source — demo-only behavior not in the Rust core). `/api/turn` in
+> worker.js now routes through the wasm governor (real Rust). The remaining
+> hand-ports above are thin shells; the equivalence harness still covers them.
 
 ## Layout
 
