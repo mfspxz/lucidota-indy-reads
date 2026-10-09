@@ -145,8 +145,9 @@
   // The correction turn: declared explicitly so the governor emits the
   // ClaimRevision receipt and invalidates pending output.
   function sendCorrectionTurn(text, corr) {
-    fetch(withKey(API_BASE + '/api/turn'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    fetch(API_BASE + '/api/turn', {
+      method: 'POST', headers: { 'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + _inboundKey },
       body: JSON.stringify({ utterance: text, correction_of: corr })
     }).then(function (res) { return res.json(); }).then(function (r) {
       log('INDY', '[correction] ' + r.reply +
@@ -200,7 +201,8 @@
     setStatus('requesting session…');
     var res;
     try {
-      res = await fetch(withKey(API_BASE + '/api/alebex/session'));
+      res = await fetch(API_BASE + '/api/alebex/session', {
+        headers: { 'Authorization': 'Bearer ' + _inboundKey } });
     } catch (e) { setStatus('gateway unreachable'); return; }
     if (!res.ok) {
       var msg = await res.text();

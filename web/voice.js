@@ -357,8 +357,9 @@
     setOverlay(pf); // instant preface — perceived latency cut
     log('heard: ' + utterance.slice(0, 80));
     try {
-      const res = await fetch(withKey('/api/turn'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch('/api/turn', {
+        method: 'POST', headers: { 'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + _inboundKey },
         body: JSON.stringify({ session_id: sessionId, utterance, persona: 'indy', era: 'prime', tone: 'dry' }),
       });
       log('turn http=' + res.status);
