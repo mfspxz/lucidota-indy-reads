@@ -298,11 +298,23 @@
         if (!ok) return;
         let v = null;
         try {
+          // Shadow proposal: the complete, honest shape the server builds
+          // for a conversational turn (shell-core.mjs converse branch).
+          // decide() derives epistemic_status from (claim_text, evidence)
+          // only — claim:null falls back to the utterance, evidence is []
+          // client and server side — so this tracks the server verdict.
+          // The adapter runs EXACTLY this proposal; nothing is substituted.
           v = G.verdict(JSON.stringify({
             request_id: 'w-' + Date.now().toString(36),
             session_id: sessionId || 's-wasm',
             utterance: utterance,
-            proposal: { intent: 'assess_claim' },
+            proposal: {
+              intent: 'converse',
+              claim: null,
+              hypothesis: null,
+              requested_action: null,
+              response_style: 'conversational',
+            },
             evidence: [],
           }));
         } catch (e) {

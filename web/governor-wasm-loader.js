@@ -113,26 +113,30 @@
 
   // verdict(inputJson): shadow-mode entry. Accepts the voice.js shape
   // {request_id, session_id, utterance, proposal, evidence} and runs the
-  // REAL Rust decide pipeline. Returns the GovernorDecision JSON plus
-  // the derived authority_rejected flag voice.js reads.
+  // REAL Rust decide pipeline on EXACTLY the proposal the caller sent —
+  // the adapter never substitutes or rewrites it (wave-33: the old code
+  // silently replaced any proposal with a fixed converse one, so what
+  // voice.js sent was not what ran). A missing/non-object proposal is a
+  // fail-closed error, never a silent default: shadow must not invent
+  // inputs. Returns the GovernorDecision JSON plus the derived
+  // authority_rejected flag voice.js reads.
   function verdict(inputJson) {
     if (!gov) return { error: 'wasm governor not loaded' };
     var input;
     try { input = JSON.parse(inputJson); }
     catch (e) { return { error: 'bad input json' }; }
     var utterance = String(input.utterance || '');
+    var proposal = input.proposal;
+    if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) {
+      return { error: 'bad proposal shape: shadow refuses to invent inputs' };
+    }
     var d;
     try {
       d = gov.decide({
         request_id: String(input.request_id || 'w-' + Date.now().toString(36)),
         session_id: String(input.session_id || 's-wasm'),
         utterance: utterance,
-        proposal: {
-          intent: 'converse',
-          claim: null, hypothesis: null,
-          requested_action: null,
-          response_style: 'conversational',
-        },
+        proposal: proposal,
         evidence: Array.isArray(input.evidence) ? input.evidence : [],
       });
     } catch (e) {
