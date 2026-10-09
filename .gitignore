@@ -18,3 +18,7 @@ __pycache__/
 # release bundles + local deploy target (reproducible via ./release; never commit)
 releases/
 deploy-local/
+node_modules/
+*.pyc
+.venv/
+state/
