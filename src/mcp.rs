@@ -167,6 +167,8 @@ pub fn tool_descriptors() -> Value {
         d("receipt.list", "List recent receipts.", &[]),
         d("governor.evaluate", "Run an utterance through the same deterministic pipeline as voice: classify, derive epistemics, receipt, respond.", &["utterance"]),
         d("system.health", "Server health and counters.", &[]),
+        d("gmail.search", "Search Zack's Gmail (READ-ONLY). Returns message_id/from/subject/date hits; fetch bodies with gmail.read. Gmail search syntax supported.", &["query"]),
+        d("gmail.read", "Read one Gmail message by id (READ-ONLY). Records the message as UNVERIFIED evidence (kind Document, real record not fixture); full body is saved to the returned message file. Send/reply are deliberately NOT exposed — sends need the user's explicit approval.", &["message_id"]),
     ])
 }
 
@@ -409,6 +411,86 @@ pub fn call_tool(state: &mut McpState, name: &str, mut args: Value) -> Value {
                 json!({"status": "ok", "service": "indy-mcp", "claims": state.claims.len(), "evidence_items": state.evidence.len(), "receipts": state.receipts.len(), "policy_id": state.policy.policy_id}),
                 None,
             )),
+            "gmail.search" => {
+                let query = get_str(&args, "query")?;
+                let max = args.get("max").and_then(|v| v.as_u64()).map(|n| n as u32);
+                let conn = crate::gmail::GmailConnector::new();
+                if !conn.is_enabled() {
+                    return Err(format!(
+                        "gmail.search unavailable: {}",
+                        conn.disabled_reason().unwrap_or("unknown")
+                    ));
+                }
+                let hits = conn
+                    .search(&query, max)
+                    .map_err(|e| format!("gmail.search failed: {}", e))?;
+                let items: Vec<Value> = hits
+                    .iter()
+                    .map(|h| {
+                        json!({"message_id": h.id, "from": h.from, "subject": h.subject, "date": h.date})
+                    })
+                    .collect();
+                Ok((
+                    json!({"query": query, "count": items.len(), "messages": items}),
+                    None,
+                ))
+            }
+            "gmail.read" => {
+                let id = get_str(&args, "message_id")?;
+                let conn = crate::gmail::GmailConnector::new();
+                if !conn.is_enabled() {
+                    return Err(format!(
+                        "gmail.read unavailable: {}",
+                        conn.disabled_reason().unwrap_or("unknown")
+                    ));
+                }
+                let m = conn
+                    .read(&id)
+                    .map_err(|e| format!("gmail.read failed: {}", e))?;
+                // Record the message as evidence at intake: UNVERIFIED,
+                // kind Document, fixture=false (real transport record).
+                // Body excerpt stored; full text lives in message_file.
+                let excerpt: String = m.body_text.chars().take(2000).collect();
+                let ev = Evidence {
+                    id: crate::receipts::new_id(),
+                    source: format!("gmail:{}", m.id),
+                    text: format!(
+                        "From: {}\nSubject: {}\nDate: {}\nThread: {}\nAttachments: {}\nFile: {}\n\n{}",
+                        m.from,
+                        m.subject,
+                        m.date,
+                        m.thread_id,
+                        m.attachment_count,
+                        m.message_file.as_deref().unwrap_or("(no saved file)"),
+                        excerpt
+                    ),
+                    kind: EvidenceKind::Document,
+                    status: EvidenceStatus::Unverified,
+                    hash: hash_str(&m.body_text),
+                    fixture: false,
+                };
+                let eid = ev.id.clone();
+                state.evidence.insert(eid.clone(), ev);
+                let rid = state.receipt("gmail.read", &m.subject, "RECORDED:UNVERIFIED", "UNKNOWN");
+                Ok((
+                    json!({
+                        "message_id": m.id,
+                        "thread_id": m.thread_id,
+                        "from": m.from,
+                        "to": m.to,
+                        "subject": m.subject,
+                        "date": m.date,
+                        "body_text": m.body_text,
+                        "body_truncated": m.body_truncated,
+                        "message_file": m.message_file,
+                        "attachment_count": m.attachment_count,
+                        "evidence_id": eid,
+                        "evidence_status": "UNVERIFIED",
+                        "note": "Recorded as UNVERIFIED evidence — recording is not believing."
+                    }),
+                    Some(rid),
+                ))
+            }
             _ => Err(format!("unknown tool: {}", name)),
         }
     })();

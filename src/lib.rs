@@ -9,11 +9,17 @@ pub mod avatar;
 pub mod diarize;
 pub mod domain;
 pub mod embeddings;
+pub mod gmail;
 pub mod governor;
 pub mod mcp;
+pub mod mcp_stdio;
+pub mod prompts;
 pub mod receipts;
 pub mod store;
 pub mod theater;
+pub mod time_util;
+pub mod tokens;
+pub mod tool_schemas;
 pub mod voice;
 
 /// Build-time provenance (C1). Baked in by build.rs: the binary carries its

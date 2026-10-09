@@ -59,54 +59,63 @@ fn schema(props: Value, required: &[&str]) -> Value {
 
 /// The five governor operations exposed as voice tools. Small, rich, narrow.
 /// Descriptions are written for the MODEL (the trigger), not for developers.
+///
+/// URL contract (repair 2026-10-08): each voice tool is a friendly alias for a
+/// REAL MCP tool served at POST /api/mcp/:tool (src/mcp.rs, src/api.rs).
+/// Parameter names MUST match the MCP tool's expected args exactly, because
+/// Alebex posts the parameters object as the request body verbatim. The old
+/// /api/tools/* URLs pointed at routes that never existed (404) and the old
+/// parameter names did not match any MCP tool — both fixed here.
 fn tool_defs(base_url: &str) -> Vec<VoiceTool> {
     vec![
         VoiceTool {
             name: "evaluate_claim".into(),
-            description: "Ask what the evidence actually says about a claim: proven, disproven, or unknown. Call this whenever the caller asserts something is true or asks whether something is real. Never answer from memory when this tool exists — check the evidence. The governor decides; you only phrase its verdict.".into(),
-            url: format!("{}/api/tools/evaluate_claim", base_url),
+            description: "Ask what the evidence actually says about a claim: proven, disproven, or unknown. Call this whenever the caller asserts something is true or asks whether something is real. Never answer from memory when this tool exists — check the evidence. The governor decides; you only phrase its verdict. Pass the caller's exact words as `utterance`.".into(),
+            url: format!("{}/api/mcp/governor.evaluate", base_url),
             headers: None,
             timeout_ms: 8000,
             parameters: schema(json!({
-                "claim_text": { "type": "string", "description": "The exact claim to evaluate, as the caller stated it" },
-            }), &["claim_text"]),
+                "utterance": { "type": "string", "description": "The caller's exact assertion or question, verbatim" },
+            }), &["utterance"]),
         },
         VoiceTool {
             name: "record_observation".into(),
-            description: "Record something the caller says they saw, heard, or experienced. Call this when the caller reports a firsthand observation you should keep. Observations are stored as UNVERIFIED — recording is not believing.".into(),
-            url: format!("{}/api/tools/record_observation", base_url),
+            description: "Record something the caller says they saw, heard, or experienced. Call this when the caller reports a firsthand observation you should keep. Observations are stored as UNVERIFIED — recording is not believing. Pass kind as \"observation\".".into(),
+            url: format!("{}/api/mcp/evidence.add", base_url),
             headers: None,
             timeout_ms: 8000,
             parameters: schema(json!({
                 "text": { "type": "string", "description": "What the caller says they observed, in their own words" },
                 "claim_id": { "type": "string", "description": "Claim this relates to, if one was just evaluated" },
+                "kind": { "type": "string", "description": "Pass \"observation\"" },
             }), &["text"]),
         },
         VoiceTool {
             name: "get_evidence".into(),
             description: "Fetch the evidence held for a claim, with verification status for each item. Call this when the caller asks what evidence exists, or before you summarize the case for or against something.".into(),
-            url: format!("{}/api/tools/get_evidence", base_url),
+            url: format!("{}/api/mcp/evidence.list", base_url),
             headers: None,
             timeout_ms: 8000,
             parameters: schema(json!({
                 "claim_id": { "type": "string", "description": "The claim to fetch evidence for" },
-            }), &["claim_id"]),
+            }), &[]),
         },
         VoiceTool {
             name: "create_hypothesis".into(),
-            description: "Register a possible explanation as a HYPOTHESIS — explicitly not a fact. Call this when you or the caller propose what could explain an observation. Hypotheses stay labeled until evidence moves them.".into(),
-            url: format!("{}/api/tools/create_hypothesis", base_url),
+            description: "Register a possible explanation as a HYPOTHESIS — explicitly not a fact. Call this when you or the caller propose what could explain an observation. Hypotheses stay labeled until evidence moves them. Recorded UNVERIFIED; pass kind as \"inference\".".into(),
+            url: format!("{}/api/mcp/evidence.add", base_url),
             headers: None,
             timeout_ms: 8000,
             parameters: schema(json!({
                 "text": { "type": "string", "description": "The proposed explanation, phrased as a possibility" },
                 "claim_id": { "type": "string", "description": "Claim this might explain, if any" },
+                "kind": { "type": "string", "description": "Pass \"inference\"" },
             }), &["text"]),
         },
         VoiceTool {
             name: "get_receipts".into(),
             description: "Fetch recent governor receipts: what was decided, on what evidence, under which policy. Call this when the caller asks how you know something, why you decided something, or wants proof of a decision.".into(),
-            url: format!("{}/api/tools/get_receipts", base_url),
+            url: format!("{}/api/mcp/receipt.list", base_url),
             headers: None,
             timeout_ms: 8000,
             parameters: schema(json!({
