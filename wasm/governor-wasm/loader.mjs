@@ -54,7 +54,11 @@ export async function loadGovernor(wasmBytes) {
   const readStr = (ptr, len) =>
     new TextDecoder().decode(memoryU8().subarray(ptr, ptr + len));
 
-  const { instance } = await WebAssembly.instantiate(wasmBytes, imports);
+  // WebAssembly.instantiate has two overloads: bytes -> {module, instance},
+  // precompiled Module -> Instance directly. Workers only allows the latter.
+  const instantiated = await WebAssembly.instantiate(wasmBytes, imports);
+  const instance =
+    instantiated instanceof WebAssembly.Instance ? instantiated : instantiated.instance;
   const ex = instance.exports;
   const names = Object.keys(ex);
   memoryU8 = () => new Uint8Array(ex.memory.buffer);

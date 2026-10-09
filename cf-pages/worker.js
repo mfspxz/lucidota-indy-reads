@@ -27,17 +27,40 @@ function json(data, status) {
   });
 }
 
-// ---- wasm governor (per isolate). The module is fetched from the site's
-// ---- own origin (/governor_wasm.wasm.gz, shipped by kv-upload.py) and
-// ---- gunzipped in-isolate. GOVERNOR_WASM_BYTES injects bytes for tests.
+// ---- wasm governor (per isolate). ----
+// Workers platform rule (verified 2026-10-08): runtime wasm compilation is
+// DISALLOWED ("Wasm code generation disallowed by embedder") — bytes from
+// KV/fetch can never instantiate. The ONLY sanctioned path is a precompiled
+// module shipped at deploy time. deploy.py stages governor_wasm.wasm
+// alongside this module; the import below resolves on Workers and is
+// skipped under node (harness/tests), where the KV/fetch fallbacks work.
+let PRECOMPILED_WASM = null;
+try {
+    const m = await import('./governor_wasm.wasm');
+    PRECOMPILED_WASM = m && m.default instanceof WebAssembly.Module ? m.default : null;
+} catch { /* node/local: wasm not staged; use fallbacks */ }
 // ---- On any wasm throw the instance is dropped and recreated once.
 let wasmP = null, gov = null, mcp = null;
 function resetGov() { gov = null; mcp = null; }
 async function loadWasmBytes(env, request) {
+  // Precompiled module (deploy-staged): the ONLY wasm path Workers allows
+  // at request time. WebAssembly.instantiate accepts a Module directly,
+  // so loadGovernor needs no changes.
+  if (PRECOMPILED_WASM) return PRECOMPILED_WASM;
+  if (env.GOVERNOR_WASM instanceof WebAssembly.Module) return env.GOVERNOR_WASM;
   if (env.GOVERNOR_WASM_BYTES) return env.GOVERNOR_WASM_BYTES;
+  // Local/node fallback (wrangler dev, tests): runtime compile is fine there.
+  if (env.ASSETS) {
+    try {
+      const gz = await env.ASSETS.get("governor_wasm.wasm.gz", "arrayBuffer");
+      if (gz && gz.byteLength > 1000) return await gunzipBytes(gz);
+    } catch { /* fall through to self-fetch */ }
+  }
   const r = await fetch(new URL('/governor_wasm.wasm.gz', request.url));
   if (!r.ok) throw new Error('wasm fetch ' + r.status);
-  const gz = await r.arrayBuffer();
+  return await gunzipBytes(await r.arrayBuffer());
+}
+async function gunzipBytes(gz) {
   const ds = new DecompressionStream('gzip');
   const stream = new Blob([gz]).stream().pipeThrough(ds);
   return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -51,7 +74,7 @@ async function getHandles(env, request) {
 }
 
 // ===== turn =====
-async function turnHandler({ request, env }) {
+async function turnHandler({ request, env, ctx }) {
   if (request.method !== 'POST') return json({ error: 'POST only' }, 405);
   let body = {};
   try { body = await request.json(); } catch {}
@@ -62,7 +85,10 @@ async function turnHandler({ request, env }) {
       providers.push({ name: 'primary', generate: makeGenerate({ url: env.ROUTER_URL, key: env.ROUTER_KEY, label: 'primary' }) });
     if (env.ROUTER_KEY_2 && String(env.ROUTER_KEY_2).trim())
       providers.push({ name: 'secondary', generate: makeGenerate({ url: env.ROUTER_URL_2, key: env.ROUTER_KEY_2, label: 'secondary' }) });
-    return handleTurn(h, { body, providers, sha256hex });
+    const out = await handleTurn(h, { body, providers, sha256hex });
+    // D1 mirror: durable copy of the receipt chain, off the hot path.
+    if (ctx && ctx.waitUntil) ctx.waitUntil(mirrorReceiptsToD1(env, h.gov));
+    return out;
   };
   try {
     const out = await run();
@@ -88,7 +114,7 @@ async function healthHandler({ env }) {
 }
 
 // ===== receipts =====
-async function receiptsHandler({ env, request }) {
+async function receiptsHandler({ env, request, ctx }) {
   try {
     const h = await getHandles(env, request);
     const n = Math.min(200, Math.max(1, parseInt(new URL(request.url).searchParams.get('n') || '50', 10) || 50));
@@ -102,7 +128,7 @@ async function receiptsHandler({ env, request }) {
 }
 
 // ===== mcp =====
-async function mcpHandler({ env, request }) {
+async function mcpHandler({ env, request, ctx }) {
   let h;
   try {
     h = await getHandles(env, request);
@@ -117,6 +143,8 @@ async function mcpHandler({ env, request }) {
     let body = {};
     try { body = await request.json(); } catch {}
     const out = handleMcpPost(h, body);
+    // D1 mirror: durable copy of the receipt chain, off the hot path.
+    if (ctx && ctx.waitUntil) ctx.waitUntil(mirrorReceiptsToD1(env, h.gov));
     return json(out.json, out.status);
   }
   return json({ error: 'method not allowed' }, 405);
@@ -174,6 +202,40 @@ async function serveStatic(pathname, env) {
   return new Response(entry.value, { headers });
 }
 
+// ---------- D1 receipt mirror (repair 2026-10-08) ----------
+// D1 (env.INDY_D1, provisioned 2026-10-08, schema cloudflare/d1-schema.sql)
+// mirrors the in-isolate receipt chain for cross-isolate audit. Best-effort:
+// never blocks the response, never fails the request. The wasm governor's
+// in-memory chain remains the source of truth; D1 is the durable copy.
+// Schema: receipts(receipt_id PK, request_id, session_id, timestamp_ms,
+// actor, operation, input_hash, decision, epistemic_status, output_hash,
+// duration_ms, success, prev_hash).
+async function mirrorReceiptsToD1(env, gov) {
+  if (!env || !env.INDY_D1 || !gov || typeof gov.recent_receipts !== 'function') return;
+  let receipts;
+  try {
+    // NOTE: the wasm loader returns PARSED objects (not JSON strings) —
+    // JSON.parse on them throws "[object Object] is not valid JSON".
+    const raw = gov.recent_receipts(10);
+    receipts = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch { return; }
+  if (!Array.isArray(receipts) || !receipts.length) return;
+  try {
+    const batch = receipts.map(r => env.INDY_D1.prepare(
+      `INSERT OR IGNORE INTO receipts
+       (receipt_id, request_id, session_id, timestamp_ms, actor, operation,
+        input_hash, decision, epistemic_status, output_hash, duration_ms,
+        success, prev_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      r.receipt_id, r.request_id, r.session_id, r.timestamp_ms, r.actor,
+      r.operation, r.input_hash, r.decision, r.epistemic_status ?? null,
+      r.output_hash, r.duration_ms, r.success ? 1 : 0, r.prev_hash
+    ));
+    await env.INDY_D1.batch(batch);
+  } catch { /* D1 is a mirror, not a dependency — swallow */ }
+}
+
 // ---------- router ----------
 const API_HANDLERS = { turn: turnHandler, health: healthHandler, receipts: receiptsHandler, mcp: mcpHandler, tts: ttsHandler };
 
@@ -186,7 +248,7 @@ export default {
       const h = API_HANDLERS[route];
       if (h) {
         try {
-          return await h({ request, env, params: {} });
+          return await h({ request, env, ctx, params: {} });
         } catch (e) {
           return new Response(JSON.stringify({ error: "worker: " + e.message }), {
             status: 500, headers: { "content-type": "application/json" },
