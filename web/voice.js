@@ -304,19 +304,19 @@
           // only — claim:null falls back to the utterance, evidence is []
           // client and server side — so this tracks the server verdict.
           // The adapter runs EXACTLY this proposal; nothing is substituted.
-          v = G.verdict(JSON.stringify({
-            request_id: 'w-' + Date.now().toString(36),
-            session_id: sessionId || 's-wasm',
-            utterance: utterance,
-            proposal: {
-              intent: 'converse',
-              claim: null,
-              hypothesis: null,
-              requested_action: null,
-              response_style: 'conversational',
-            },
-            evidence: [],
-          }));
+          // Construction lives in web/shadow-input-builder.js, shared with
+          // the differential harness — one copy, drift impossible.
+          var SIB = (typeof window !== 'undefined' && window.ShadowInputBuilder) || null;
+          if (!SIB || typeof SIB.buildShadowInput !== 'function') {
+            wasmSkip++;
+            log('WASM_CHECK skipped: shadow-input-builder.js not loaded', 'warn');
+            return;
+          }
+          v = G.verdict(SIB.buildShadowInput(
+            utterance,
+            'w-' + Date.now().toString(36),
+            sessionId || 's-wasm'
+          ));
         } catch (e) {
           wasmSkip++;
           log('WASM_CHECK error: ' + String(e.message || e).slice(0, 60), 'warn');

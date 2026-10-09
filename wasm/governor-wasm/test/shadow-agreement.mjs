@@ -7,7 +7,8 @@
 // All outputs must MATCH after normalization, or every mismatch is explained.
 //
 // What this tests (the full shadow path, not just the wasm module):
-//   1. voice.js input construction (mirrored 1:1 in voiceInput())
+//   1. the shared shadow-input construction (web/shadow-input-builder.js,
+//      consumed by voice.js AND this harness — drift impossible)
 //   2. the loader's verdict() adapter: JSON parse, proposal handling,
 //      authority_rejected derivation from the reason string
 //   3. the wasm module's decide() vs native decide() on the EFFECTIVE proposal
@@ -20,26 +21,20 @@ import { execFileSync } from 'node:child_process';
 
 const ROOT = new URL('../../..', import.meta.url).pathname;
 
-// ---- 1:1 mirror of web/voice.js::wasmShadowCheck input construction ----
-// The SHADOW_PROPOSAL constant must be kept identical to the proposal
-// voice.js sends. Any drift here invalidates the differential.
-// (Updated wave-33: was spike-era {intent:'assess_claim'} fragment.)
-const SHADOW_PROPOSAL = {
-  intent: 'converse',
-  claim: null,
-  hypothesis: null,
-  requested_action: null,
-  response_style: 'conversational',
-};
+// ---- input construction: THE shared builder, not a mirror ----
+// web/shadow-input-builder.js is the single source of truth for the shadow
+// input shape, consumed here and by web/voice.js::wasmShadowCheck.
+// Drift is structurally impossible: there is no second copy of the
+// construction logic anywhere in the tree (verified by grep).
+await import('../../../web/shadow-input-builder.js');
+const SIB = globalThis.ShadowInputBuilder;
+if (!SIB || typeof SIB.buildShadowInput !== 'function' || typeof SIB.buildShadowProposal !== 'function') {
+  console.error('FAIL: shadow-input-builder.js did not expose the expected API');
+  process.exit(1);
+}
 
 function voiceInput(utterance, i) {
-  return JSON.stringify({
-    request_id: 'w-shadow-' + i,
-    session_id: 's-shadow',
-    utterance: utterance,
-    proposal: { ...SHADOW_PROPOSAL },
-    evidence: [],
-  });
+  return SIB.buildShadowInput(utterance, 'w-shadow-' + i, 's-shadow');
 }
 
 // ---- case set: >= 20 utterances, claims / authority / edge cases ----
@@ -129,7 +124,7 @@ const cases = UTTERANCES.map((u, i) => ({
   request_id: 'w-shadow-' + i,
   session_id: 's-shadow',
   utterance: u,
-  proposal: { ...SHADOW_PROPOSAL },
+  proposal: SIB.buildShadowProposal(),
   evidence: [],
 }));
 const casesPath = new URL('./shadow-cases.json', import.meta.url);
