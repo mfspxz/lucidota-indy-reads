@@ -190,12 +190,28 @@ for (const c of cases) {
 }
 
 // ---- compare ----
+// Host-only tools (wave-36): gmail.search/gmail.read shell out to the host
+// `hatch_gws_cli` binary, which cannot exist in the wasm32 sandbox. They are
+// cfg-gated out of the wasm build by design — not drift. The differential
+// asserts the wasm descriptor set equals the native set MINUS these declared
+// host-only tools; any OTHER descriptor difference is a real divergence.
+const HOST_ONLY_TOOLS = new Set(['gmail.search', 'gmail.read']);
 let failures = 0;
 for (let i = 0; i < cases.length; i++) {
   const n = nativeResults[i], w = wasmResults[i];
   if (n.op !== w.op) { console.error(`op order mismatch at ${i}`); failures++; continue; }
   const diffs = [];
-  deepEqual(normalize(n.result), normalize(w.result), n.op, diffs);
+  let nRes = normalize(n.result), wRes = normalize(w.result);
+  if (n.op === 'mcp_descriptors' && Array.isArray(nRes) && Array.isArray(wRes)) {
+    const nFiltered = nRes.filter((t) => !HOST_ONLY_TOOLS.has(t && t.name));
+    const wLeaked = wRes.filter((t) => HOST_ONLY_TOOLS.has(t && t.name));
+    if (wLeaked.length) {
+      diffs.push(`mcp_descriptors: host-only tool(s) leaked into wasm build: ${wLeaked.map((t) => t.name).join(',')}`);
+    }
+    deepEqual(nFiltered, wRes, n.op, diffs);
+  } else {
+    deepEqual(nRes, wRes, n.op, diffs);
+  }
   if (diffs.length) {
     failures++;
     console.error(`DIVERGENCE in ${n.op} (${diffs.length} field diffs):`);
