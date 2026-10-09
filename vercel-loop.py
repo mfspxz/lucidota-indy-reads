@@ -41,6 +41,7 @@ FILES = {
     "art/indy/prop-notebook.webp": "web/art/indy/prop-notebook.webp",
 }
 API_FILES = {
+    "api/_auth.js": "api/_auth.js",
     "api/turn.js": "api/turn.js",
     "api/health.js": "api/health.js",
     "api/receipts.js": "api/receipts.js",
@@ -151,12 +152,18 @@ def main():
     # WASM governor: 157KB raw blows the CLI's 128KB single-argument limit,
     # so it rides the file store (gzipped) and is referenced by sha.
     # The browser loader fetches governor_wasm.wasm.gz and gunzips it.
+    # NOTE (2026-10-09): the gzipped wasm (123KB -> 164KB base64) ALSO exceeds
+    # the limit. The loader degrades gracefully without it, so we warn and
+    # deploy without. Fix properly via dashboard drag-drop or git integration.
     gzdata = ensure_wasm_gz()
     gsha = hashlib.sha1(gzdata).hexdigest()
-    vcall("upload_file", {"xVercelDigest": gsha, "contentLength": len(gzdata),
-                          "requestBody": base64.b64encode(gzdata).decode()})
-    payload_files.append({"file": "governor_wasm.wasm.gz", "sha": gsha, "size": len(gzdata)})
-    print(f"wasm uploaded by sha {gsha[:12]} ({len(gzdata)} bytes gz)")
+    try:
+        vcall("upload_file", {"xVercelDigest": gsha, "contentLength": len(gzdata),
+                              "requestBody": base64.b64encode(gzdata).decode()})
+        payload_files.append({"file": "governor_wasm.wasm.gz", "sha": gsha, "size": len(gzdata)})
+        print(f"wasm uploaded by sha {gsha[:12]} ({len(gzdata)} bytes gz)")
+    except OSError as e:
+        print(f"WARN: wasm upload skipped ({e}); loader degrades gracefully")
 
     # Bundled router key: injected at deploy time from the key manager.
     # Never written to the repo, never sync-checked, never served —

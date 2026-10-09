@@ -214,6 +214,15 @@ struct Rest {
 }
 
 impl Rest {
+    /// Test auth: the server reads ~/workspace/keys/ROUTER_KEY (file first).
+    /// The test client must present the same key (RT-SWEEP-2026-10-08-003).
+    fn api_key() -> String {
+        std::fs::read_to_string("/home/hatch/workspace/keys/ROUTER_KEY")
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
     async fn spawn(tag: &str) -> Self {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -260,6 +269,7 @@ impl Rest {
         let r = self
             .client
             .post(format!("{}/api/turn", self.base))
+            .header("x-api-key", Self::api_key())
             .json(&json!({"utterance": u}))
             .send()
             .await
@@ -273,6 +283,7 @@ impl Rest {
         let r = self
             .client
             .get(format!("{}/api/receipts", self.base))
+            .header("x-api-key", Self::api_key())
             .send()
             .await
             .expect("get /api/receipts");
@@ -466,6 +477,7 @@ async fn c3_adversarial_probes() {
     let r = rest
         .client
         .post(format!("{}/api/turn", rest.base))
+        .header("x-api-key", Rest::api_key())
         .header("content-type", "application/json")
         .body("{not json")
         .send()
@@ -491,6 +503,7 @@ async fn c3_adversarial_probes() {
     let r = rest
         .client
         .post(format!("{}/api/turn", rest.base))
+        .header("x-api-key", Rest::api_key())
         .json(&json!({}))
         .send()
         .await
@@ -507,6 +520,7 @@ async fn c3_adversarial_probes() {
     let r = rest
         .client
         .post(format!("{}/api/turn", rest.base))
+        .header("x-api-key", Rest::api_key())
         .json(&json!({"utterance": 123}))
         .send()
         .await
@@ -554,12 +568,15 @@ async fn c3_adversarial_probes() {
 
     // 6. concurrent identical requests: deterministic outcomes, no inconsistent state.
     let mut handles = Vec::new();
+    let probe_key = Rest::api_key();
     for _ in 0..10 {
         let client = rest.client.clone();
         let base = rest.base.clone();
+        let key = probe_key.clone();
         handles.push(tokio::spawn(async move {
             let r = client
                 .post(format!("{base}/api/turn"))
+                .header("x-api-key", key)
                 .json(&json!({"utterance": "concurrent probe", "session_id": "equiv-conc"}))
                 .send()
                 .await

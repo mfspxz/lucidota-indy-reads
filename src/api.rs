@@ -234,8 +234,12 @@ struct GovernorDecisionLite {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    // RT-SWEEP-2026-10-08-003 parity: the JS (Vercel) handlers got fail-closed
+    // inbound auth; the native server was wide open on 0.0.0.0. All API
+    // routes now require the router key. /health stays open (standard
+    // liveness probe; returns no sensitive data) and static web/ stays open
+    // (UI shell).
+    let api = Router::new()
         .route("/api/turn", post(turn))
         .route("/api/session/:id", get(get_session))
         .route("/api/transcript/:id", get(transcript))
@@ -246,9 +250,146 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/mcp/tools", get(mcp_tools))
         .route("/api/mcp/:tool", post(mcp_call))
         .route("/ws", get(ws_handler))
+        .layer(axum::middleware::from_fn(require_api_key))
+        .with_state(state);
+    Router::new()
+        .route("/health", get(health))
+        .merge(api)
         .nest_service("/", ServeDir::new("web"))
         .layer(CorsLayer::permissive())
-        .with_state(state)
+}
+
+/// Fail-closed inbound auth, mirroring api/_auth.js.
+/// Key material: ~/workspace/keys/ROUTER_KEY file first, then ROUTER_KEY env.
+/// Carriers: `x-api-key` header, `Authorization: Bearer`, `?key=` query.
+/// No key configured => 500 (never open). Mismatch => 401. Timing-safe compare.
+async fn require_api_key(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> impl IntoResponse {
+    use std::io::Read as _;
+    fn expected_key() -> Option<String> {
+        for p in [
+            std::env::var("HOME").ok().map(|h| format!("{}/workspace/keys/ROUTER_KEY", h)),
+            Some("/home/hatch/workspace/keys/ROUTER_KEY".to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Ok(mut f) = std::fs::File::open(&p) {
+                let mut s = String::new();
+                if f.read_to_string(&mut s).is_ok() {
+                    let k = s.trim().to_string();
+                    if !k.is_empty() {
+                        return Some(k);
+                    }
+                }
+            }
+        }
+        std::env::var("ROUTER_KEY").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    fn constant_time_eq(a: &str, b: &str) -> bool {
+        let ab = a.as_bytes();
+        let bb = b.as_bytes();
+        if ab.len() != bb.len() {
+            return false;
+        }
+        let mut diff = 0u8;
+        for (x, y) in ab.iter().zip(bb.iter()) {
+            diff |= x ^ y;
+        }
+        diff == 0
+    }
+    let expected = match expected_key() {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auth not configured",
+            )
+                .into_response()
+        }
+    };
+    let headers = req.headers();
+    let mut got: Option<String> = None;
+    if let Some(h) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        let t = h.trim();
+        if !t.is_empty() {
+            got = Some(t.to_string());
+        }
+    }
+    if got.is_none() {
+        if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+            let t = auth.trim();
+            if let Some(rest) = t.strip_prefix("Bearer ").or_else(|| t.strip_prefix("bearer ")) {
+                let k = rest.trim();
+                if !k.is_empty() {
+                    got = Some(k.to_string());
+                }
+            } else if t.to_lowercase().starts_with("bearer") {
+                // "Bearer" with irregular whitespace
+                let k = t[6..].trim();
+                if !k.is_empty() {
+                    got = Some(k.to_string());
+                }
+            }
+        }
+    }
+    if got.is_none() {
+        if let Some(q) = req.uri().query() {
+            for pair in q.split('&') {
+                let mut kv = pair.splitn(2, '=');
+                if kv.next() == Some("key") {
+                    if let Some(v) = kv.next() {
+                        // minimal percent-decode for the key param
+                        let dec = percent_decode(v);
+                        if !dec.trim().is_empty() {
+                            got = Some(dec.trim().to_string());
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    match got {
+        Some(k) if constant_time_eq(&k, &expected) => next.run(req).await,
+        _ => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+    }
+}
+
+/// Minimal percent-decode (only what a key param needs).
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%' && i + 2 < bytes.len() {
+            let hex = |c: u8| match c {
+                b'0'..=b'9' => c - b'0',
+                b'a'..=b'f' => c - b'a' + 10,
+                b'A'..=b'F' => c - b'A' + 10,
+                _ => 0,
+            };
+            // Only decode if both are valid hex; otherwise emit literally.
+            let hi = bytes[i + 1];
+            let lo = bytes[i + 2];
+            let valid = hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit();
+            if valid {
+                out.push((hex(hi) * 16 + hex(lo)) as char);
+                i += 3;
+                continue;
+            }
+        }
+        if b == b'+' {
+            out.push(' ');
+        } else {
+            out.push(b as char);
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Health + identity. The provenance block lets any reviewer verify that the
@@ -1198,6 +1339,38 @@ mod tests {
         // artifact is lying about the contract it ships.
         assert!(!CONTRACT_VERSION.is_empty());
         assert_eq!(CONTRACT_VERSION, "1");
+    }
+
+    #[test]
+    fn test_percent_decode() {
+        assert_eq!(percent_decode("abc123"), "abc123");
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("a+b"), "a b");
+        assert_eq!(percent_decode("%41%42"), "AB");
+        assert_eq!(percent_decode("trailing%"), "trailing%");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        // Defined inline in require_api_key; replicate the logic contract here.
+        fn ct(a: &str, b: &str) -> bool {
+            let ab = a.as_bytes();
+            let bb = b.as_bytes();
+            if ab.len() != bb.len() {
+                return false;
+            }
+            let mut diff = 0u8;
+            for (x, y) in ab.iter().zip(bb.iter()) {
+                diff |= x ^ y;
+            }
+            diff == 0
+        }
+        assert!(ct("secret", "secret"));
+        assert!(!ct("secret", "secreu"));
+        assert!(!ct("secret", "secret2"));
+        assert!(!ct("", "x"));
+        assert!(ct("", ""));
     }
 
     fn dispatch(tool: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {

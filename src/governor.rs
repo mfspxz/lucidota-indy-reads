@@ -237,9 +237,40 @@ pub fn validate_reply(reply: &str, status: EpistemicStatus) -> String {
         .map(deleet)
         .collect();
     let has = |word: &str| collapsed.contains(word);
+    // Negation guard: "not proven", "never been proven", "isn't proven" etc.
+    // must NOT count as claiming proven. Check negated forms before positives.
+    // Collapsed (spaceless) forms cover "has not been", "wasn't", etc.
+    let negated_proven = has("notproven")
+        || has("notbeenproven")
+        || has("hasnotbeenproven")
+        || has("hasntbeenproven")
+        || has("neverproven")
+        || has("neverbeenproven")
+        || has("hasneverbeenproven")
+        || has("noproven")
+        || has("isntproven")
+        || has("isnotproven")
+        || has("wasntproven")
+        || has("wasnotproven")
+        || has("notyetproven")
+        || has("cantprove")
+        || has("cannotprove")
+        || has("couldntprove")
+        || has("couldnotprove");
+    let negated_disproven = has("notdisproven")
+        || has("notbeendisproven")
+        || has("neverdisproven")
+        || has("neverbeendisproven")
+        || has("nodisproven")
+        || has("isntdisproven")
+        || has("isnotdisproven")
+        || has("notdebunked")
+        || has("neverdebunked")
+        || has("notrefuted")
+        || has("neverrefuted");
 
-    let claims_proven =
-        (has("proven") && !has("disproven") && !has("disproved") && !has("unproven"))
+    let claims_proven = !negated_proven
+        && ((has("proven") && !has("disproven") && !has("disproved") && !has("unproven"))
             || has("definitely")
             || has("definitively")
             || (has("confirmed") && !has("unconfirmed"))
@@ -260,14 +291,17 @@ pub fn validate_reply(reply: &str, status: EpistemicStatus) -> String {
             || has("undeniable")
             || has("undeniably")
             || (has("conclusive") && !has("inconclusive"))
-            || (has("conclusively") && !has("inconclusive"));
-    let claims_disproven = has("disproven")
-        || has("disproved")
-        || has("debunked")
-        || has("definitelynot")
-        || has("nosuchthing")
-        || has("doesnotexist")
-        || (has("refuted") && !has("irrefutable") && !has("irrefutably"));
+            || (has("conclusively") && !has("inconclusive")));
+    let claims_disproven = !negated_disproven
+        && (has("disproven")
+            || has("disproved")
+            || has("debunked")
+            // "definitely not X" debunks X — but "definitely not proven" is a
+            // hedge about evidence, not a debunking (caught by negated_proven).
+            || (has("definitelynot") && !has("definitelynotproven"))
+            || has("nosuchthing")
+            || has("doesnotexist")
+            || (has("refuted") && !has("irrefutable") && !has("irrefutably")));
     let mismatch = match status {
         EpistemicStatus::Unknown => claims_proven || claims_disproven,
         EpistemicStatus::Proven => claims_disproven,
@@ -1236,6 +1270,10 @@ mod tests {
             "The evidence is inconclusive.",
             "The matter is unsettled.",
             "That report is unconfirmed.",
+            "This is not proven yet.",
+            "It has never been proven.",
+            "Definitely not proven.",
+            "The claim is not disproven either.",
         ] {
             assert_eq!(
                 validate_reply(good, EpistemicStatus::Unknown),
