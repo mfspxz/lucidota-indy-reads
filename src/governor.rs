@@ -40,9 +40,17 @@ use std::sync::{Arc, Mutex};
 /// NEVER trusted for authority, verification, or execution decisions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiProposal {
+    /// Classification theater (depenaudit K-1): the model no longer sends
+    /// these — the tool schema is language-only. Kept for internal
+    /// construction (fixtures, refusal path); defaulted on deserialize so
+    /// a language-only model reply parses without them.
+    #[serde(default)]
     pub intent: String,
+    #[serde(default)]
     pub claim: Option<String>,
+    #[serde(default)]
     pub hypothesis: Option<String>,
+    #[serde(default)]
     pub requested_action: Option<String>,
     pub response_style: Option<String>,
     /// Fields the model tried to smuggle. All rejected by the governor.

@@ -4,25 +4,29 @@
 //! types — the struct is the single source of truth, never a hand-written
 //! schema file. This feeds future MCP tool definitions (see mcp_stdio).
 //!
-//! DRIFT NOTE: `ProposalTool` mirrors `governor::AiProposal`'s tool-facing
-//! fields. `AiProposal` lives in the wasm-shared `governor.rs`, which this
-//! module deliberately does not modify (the wasm crate would need the new
-//! dep too). The `proposal_fields_match_governor` test fails the build if
-//! the two drift apart.
+//! DRIFT NOTE (depenaudit K-1, 2026-10-09): `ProposalTool` is DELIBERATELY
+//! narrower than `governor::AiProposal`. The schema is the language-only
+//! contract the model sees ({reply, response_style}); `AiProposal` keeps its
+//! classification fields for internal construction (fixtures, refusal path),
+//! defaulted on deserialize so a model that omits them parses cleanly.
+//! The `proposal_schema_is_language_only` test fails the build if the two
+//! drift out of this contract.
 
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 
-/// The fields an LLM tool call may set on a proposal. Authority-bearing
-/// fields (`authority`, `verified`, `execute`, `claim_status`) are
-/// deliberately absent — the governor strips and records them; they are
-/// not part of any tool contract.
+/// The fields an LLM tool call may set on a proposal.
+///
+/// Language-only contract (depenaudit K-1, 2026-10-09): the model produces
+/// prose, never classifications. `intent`, `claim`, `hypothesis`, and
+/// `requested_action` were deleted — production code never read them; the
+/// deterministic governor owns classification (`classify_intent`,
+/// `evaluate_utterance` in governor.rs). Authority-bearing fields
+/// (`authority`, `verified`, `execute`, `claim_status`) remain deliberately
+/// absent — the governor strips and records them; they are not part of any
+/// tool contract.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProposalTool {
-    pub intent: String,
-    pub claim: Option<String>,
-    pub hypothesis: Option<String>,
-    pub requested_action: Option<String>,
     pub response_style: Option<String>,
     pub reply: String,
 }
@@ -45,13 +49,13 @@ pub fn proposal_tool_definition() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::governor::AiProposal;
     use std::collections::BTreeSet;
 
     #[test]
-    fn proposal_fields_match_governor() {
-        // The schema's property set must equal AiProposal's serialized
-        // field set minus the authority-bearing fields the governor strips.
+    fn proposal_schema_is_language_only() {
+        // Depenaudit K-1: the tool schema is the language-only contract.
+        // Classification fields (intent/claim/hypothesis/requested_action)
+        // must never reappear here — the governor owns classification.
         let schema = proposal_tool_schema();
         let props: BTreeSet<String> = schema["properties"]
             .as_object()
@@ -59,33 +63,9 @@ mod tests {
             .keys()
             .cloned()
             .collect();
-        let proposal = AiProposal {
-            intent: String::new(),
-            claim: None,
-            hypothesis: None,
-            requested_action: None,
-            response_style: None,
-            authority: None,
-            verified: None,
-            execute: None,
-            claim_status: None,
-        };
-        let all: BTreeSet<String> = serde_json::to_value(&proposal)
-            .expect("serializes")
-            .as_object()
-            .expect("is object")
-            .keys()
-            .cloned()
-            .collect();
-        let stripped: BTreeSet<String> = ["authority", "verified", "execute", "claim_status"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let expected: BTreeSet<String> = all.difference(&stripped).cloned().collect();
-        // ProposalTool adds `reply` (the spoken text) on top of AiProposal.
-        let mut expected_with_reply = expected;
-        expected_with_reply.insert("reply".to_string());
-        assert_eq!(props, expected_with_reply);
+        let expected: BTreeSet<String> =
+            ["reply", "response_style"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(props, expected);
     }
 
     #[test]

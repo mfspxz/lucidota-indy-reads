@@ -1,6 +1,6 @@
 ---
 source: src/tool_schemas.rs
-assertion_line: 95
+assertion_line: 75
 expression: def
 ---
 {
@@ -8,31 +8,10 @@ expression: def
   "name": "submit_proposal",
   "parameters": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The fields an LLM tool call may set on a proposal. Authority-bearing\nfields (`authority`, `verified`, `execute`, `claim_status`) are\ndeliberately absent — the governor strips and records them; they are\nnot part of any tool contract.",
+    "description": "The fields an LLM tool call may set on a proposal.\n\nLanguage-only contract (depenaudit K-1, 2026-10-09): the model produces\nprose, never classifications. `intent`, `claim`, `hypothesis`, and\n`requested_action` were deleted — production code never read them; the\ndeterministic governor owns classification (`classify_intent`,\n`evaluate_utterance` in governor.rs). Authority-bearing fields\n(`authority`, `verified`, `execute`, `claim_status`) remain deliberately\nabsent — the governor strips and records them; they are not part of any\ntool contract.",
     "properties": {
-      "claim": {
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "hypothesis": {
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "intent": {
-        "type": "string"
-      },
       "reply": {
         "type": "string"
-      },
-      "requested_action": {
-        "type": [
-          "string",
-          "null"
-        ]
       },
       "response_style": {
         "type": [
@@ -42,7 +21,6 @@ expression: def
       }
     },
     "required": [
-      "intent",
       "reply"
     ],
     "title": "ProposalTool",
