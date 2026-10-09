@@ -1,11 +1,24 @@
 # DIVERGENCES.md — NIH-FIND-5 JS governor-port equivalence
 
+> **Wave-24 architecture change (2026-10-09, commit 35d221f):** `api/turn.js`,
+> `api/mcp.js`, `api/receipts.js` and `cf-pages/worker.js` are now THIN SHELLS
+> over a wasm module compiled from the REAL Rust sources (`src/governor.rs`,
+> `src/mcp.rs`, … via `#[path]`). The ~700 lines of hand-ported governor
+> logic that DV-1…DV-5 fixed are DELETED from the live surfaces — the
+> divergences below are historical record for the pre-wave-24 hand ports.
+> What can still diverge is the SHELL PLUMBING (request parsing, argument
+> mapping, envelope shaping, error classes), which the wave-30 MCP-tools
+> runner pins. Note: `run.mjs` (the wave-21 turn runner) is STALE — it
+> requires `__governor_test` hooks that wave-24 deleted; it currently fails
+> with "test hooks missing". Either update it to the wasm-shell surfaces or
+> retire it.
+
 Harness: `tests/js_port_equivalence/` — 30 scripted turns × 5 surfaces
 (Rust `evaluate_utterance` / `api/turn.js` / `cf-pages/worker.js` turn handler /
 `api/mcp.js` / `cf-pages/worker.js` mcp handler) + 13 adversarial reply veto
 cases + pure-function differentials (`claims_authority`, `validate_reply`,
 `normalize`) + external receipt-chain recomputation + failover/no-network
-classification. **738/738 checks green, 0 failed** (post-fix).
+classification. **738/738 checks green, 0 failed** (post-fix, pre-wave-24).
 
 Every divergence below was MEASURED against the Rust oracle
 (`tests/js_port_equivalence/rust-ref`, which calls the real
@@ -100,6 +113,22 @@ possible but would change the deploy assembly; left as a follow-up.
 
 ## Designed boundaries (NOT divergences)
 
+- **Wave-30 MCP tools runner** (`run-mcp-tools.mjs`, 156/156 green): drives
+  all 12 MCP tools through 3 surfaces (Rust oracle / api/mcp.js /
+  worker.js mcp handler) on fresh state each, with `$step.field`
+  substitution, per-step error-class + canonical-payload equality,
+  tool-descriptor identity, MCP receipt-chain linkage, and
+  Rust-meaningful spot checks (forbidden-key stripping incl. the
+  claim.evaluate per-tool `verdict`/`epistemic_status` strip, 2/2
+  thresholds holding UNKNOWN at 1v1, health counters). Mutation-tested:
+  a corrupted api/mcp.js fails 78 checks cleanly. No divergences found —
+  the wasm shells are faithful plumbing over the real `src/mcp.rs`.
+- **Stale hand-port sources**: `cf-pages/functions/api/*.js` still contain
+  the pre-wave-24 hand ports, but `cf-pages/worker.js` no longer assembles
+  from them (wave-24 rewrote it directly as a thin shell). Re-running
+  `assemble-worker.py` today would REGRESS worker.js to the hand ports —
+  do not run it until the dedup plan lands. The functions/ sources are
+  dead code awaiting the shared-module extraction (see wave-30 dedup plan).
 - **Intent taxonomies differ by layer**: the turn handlers' `classifyIntent`
   (attack/question/hypothesis/chatter) is a UI latency preface; the Rust
   `classify_intent` (Question/HypothesisAssertion/ClaimAssertion/

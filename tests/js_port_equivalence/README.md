@@ -18,6 +18,20 @@ covered by the 169/169 Rust equivalence harness.
   `fetch` to throw (any network attempt fails the run), drives every intent
   through all 5 surfaces, recomputes each port's receipt hash chain
   externally, and prints a per-intent verdict table. Exit 0 = all pass.
+- `mcp-tools.json` — 26-step scripted MCP tool sequence covering all 12
+  tools (claim/evidence/epistemic/receipt/governor.evaluate/system.health),
+  with `$step.field` substitution for ids, error cases, forbidden-key
+  stripping probes, and threshold/adjudication flows. No hardcoded
+  expectations: the Rust reference is the oracle.
+- `run-mcp-tools.mjs` — the MCP tools runner (wave-30 follow-up). Drives the
+  script through 3 surfaces (Rust oracle / api/mcp.js / worker.js mcp
+  handler), each on ONE fresh state, and asserts per-step error-class +
+  canonical-payload equality (ids/timestamps/hashes normalized, arrays
+  sorted for HashMap order), tool-descriptor identity, receipt-chain
+  linkage (mcp chain formula), and Rust-meaningful spot checks. The worker
+  gets GOVERNOR_WASM_BYTES injected (no network). Mutation-tested:
+  a corrupted api/mcp.js fails 78 checks cleanly, no crash. Exit 0 =
+  all pass.
 - `DIVERGENCES.md` — every divergence found, severity, fix, and designed
   boundaries.
 
