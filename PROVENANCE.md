@@ -64,6 +64,12 @@ curl -s http://localhost:8080/health | python3 -c "import json,sys; print(json.l
 
 ## Known gaps (honest)
 
+- **Receipts are UNSIGNED (R-8, 2026-10-10).** The governor and MCP chains
+  bind records by hash linkage only; no key, no signature, no cosign/Rekor.
+  Anyone with the bytes can mint a chain that verifies. Verification power =
+  tamper-evidence against accidental corruption for a verifier holding an
+  independent anchor — never authentication of the producer. The D1 mirror
+  is a second copy, not an anchor (same operator controls both).
 - The Vercel demo deployment's build provenance predates this chain; its
   `/api/health` does not yet serve the commit hash. Until redeployed from
   a provenance-carrying build, treat its build identity as UNKNOWN.

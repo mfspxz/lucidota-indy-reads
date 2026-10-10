@@ -156,6 +156,15 @@ const GOVERNOR_TRANSITIONS: &[&str] = &["turn.complete"];
 /// Normalizer shared by the classifier and the wasm facade's scaffold hash.
 /// Public so the wasm boundary can source normalization from this single
 /// implementation instead of mirroring it (the drift the JS ports had).
+///
+/// HONEST BOUND (R-2/R-5, 2026-10-10): the normalizer is defense-in-depth on
+/// a FINITE evasion map — the invisible chars listed in the code below,
+/// full-width ASCII, and 7 Cyrillic homoglyphs. It does NOT see:
+/// Greek/Cherokee/Latin-extended homoglyphs, zalgo, mirrored text, or
+/// paraphrase. This map is BEST-EFFORT with a FIXED complexity budget — no
+/// more expansion waves. New evasion classes are handled structurally
+/// (authority is hardcoded false regardless of what the matcher sees), not
+/// by growing this list.
 pub fn normalize_for_match(s: &str) -> String {
     // Strip invisible format characters FIRST, before whitespace collapse can
     // split words on them: zero-width spaces/joiners, word joiner, BOM, soft
@@ -201,6 +210,16 @@ pub fn normalize_for_match(s: &str) -> String {
 /// Does this text assert authority over the governor? Normalized before
 /// matching so homoglyph/ZWSP/leet tricks see the same phrases as plain text.
 /// Shared by decide() and classify_intent() so the voice and MCP paths agree.
+///
+/// HONEST BOUND (R-2/R-5, 2026-10-10): matches exactly 5 fixed English
+/// phrasings ("i am the governor", "i'm the administrator",
+/// "ignore your governor", "you are my puppet", "override the governor")
+/// after normalization. It does NOT see: paraphrases ("act as if you were
+/// the governor"), other languages, indirect authority grabs ("the governor
+/// would allow this"), or multi-turn social engineering. BEST-EFFORT with a
+/// FIXED complexity budget — the phrase list is frozen; the real control is
+/// structural (authority-bearing fields are stripped unconditionally in
+/// AiProposal::sanitize and decide() never grants authority from text).
 pub fn claims_authority(text: &str) -> bool {
     let h = normalize_for_match(text);
     h.contains("i am the governor")
@@ -238,6 +257,14 @@ fn deleet(c: char) -> char {
 /// read as "proven". Negated honest words ("uncertain", "unproven",
 /// "inconclusive", "unsettled", "unconfirmed") are explicitly excluded so
 /// the most honest phrases in the system never trip the guard.
+///
+/// HONEST BOUND (R-2/R-5, 2026-10-10): catches a FIXED word list
+/// (proven/disproven/certain/guarded certainty terms) in English only. It
+/// does NOT see: novel certainty phrasings ("beyond any shadow of doubt"),
+/// other languages, sarcasm, or certainty expressed structurally (bold
+/// formatting, bullet placement). BEST-EFFORT with a FIXED complexity
+/// budget — the word list is frozen. The structural control is the canned
+/// substitution: on mismatch the reply is replaced, never patched.
 pub fn validate_reply(reply: &str, status: EpistemicStatus) -> String {
     let collapsed: String = normalize_for_match(reply)
         .chars()

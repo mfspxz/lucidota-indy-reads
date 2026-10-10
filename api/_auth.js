@@ -64,10 +64,13 @@ function presentedKey(req) {
   return null;
 }
 
+// SPREE-REDTEAM-A2 LOW (2026-10-09): the length-check early return below
+// was a theoretical timing oracle. Fixed 2026-10-10: compare sha256 digests
+// (fixed length) instead of raw buffers, so no length information leaks
+// before the constant-time comparison.
 function safeEqual(a, b) {
-  const ab = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  if (ab.length !== bb.length) return false;
+  const ab = crypto.createHash('sha256').update(a, 'utf8').digest();
+  const bb = crypto.createHash('sha256').update(b, 'utf8').digest();
   return crypto.timingSafeEqual(ab, bb);
 }
 

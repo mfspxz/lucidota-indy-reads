@@ -15,6 +15,15 @@
 //!
 //! Any divergence found here is a DEFECT (severity in equiv/MATRIX.md),
 //! never absorbed silently.
+//!
+//! CHANGE-DETECTION SUITE (R-7, 2026-10-10): this harness pins exact
+//! cross-transport behavior — receipt formulas asserted VERBATIM
+//! (RECEIPT-CHAINS.md: do not "unify" them without updating this contract),
+//! byte-identical native≡MCP replies, and exact decision outputs. When a
+//! behavior change breaks this suite, the change is guilty until an
+//! adversarial review signs off the new behavior; the suite's expectations
+//! are the contract, not a suggestion. Security invariants (properties) live
+//! in governor_adversarial.rs.
 
 use indy_reads::governor::evaluate_utterance;
 use serde_json::{json, Value};

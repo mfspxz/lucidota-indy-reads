@@ -6,6 +6,15 @@
 //!
 //! These are integration tests on purpose: they use only the governor's
 //! PUBLIC API, exactly what a hostile or sloppy app-layer caller can reach.
+//!
+//! PROPERTY SUITE (R-7, 2026-10-10): every test here states a SECURITY
+//! INVARIANT in implementation-free terms ("authority smuggled by the app
+//! layer never survives sanitize", "a replayed provider decision is
+//! REJECTED", "false certainty is replaced by the governor's verdict").
+//! Never rewrite one of these expectations to match a behavior change
+//! without adversarial sign-off — that would turn the suite into a
+//! tautology guard. Change-detection coverage lives in the governor module's
+//! own unit tests and in equiv_turn_paths.rs (explicitly labeled there).
 
 use indy_reads::governor::{
     reconstruct_chain, verify_chain_linkage, AiProposal, Governor, ProviderOutcome, ProviderPolicy,
