@@ -1110,6 +1110,14 @@ pub fn verify_chain_linkage(chain: &[Receipt]) -> Result<(), String> {
 }
 
 #[cfg(test)]
+/// TEST CHARACTER (R-7, 2026-10-10): MIXED. The `claims_authority` /
+/// `normalize_for_match` flag-assertions are property tests (security
+/// invariants: "homoglyph authority claim must be flagged") — never rewrite
+/// their expectations to match a behavior change without adversarial
+/// sign-off. The `validate_reply` exact-substitution assertions are
+/// change-detection (they pin the canned strings). Keep the two apart when
+/// editing: an invariant failure is a defect; a pinned-string failure is a
+/// contract change needing review.
 mod tests {
     use super::*;
 
