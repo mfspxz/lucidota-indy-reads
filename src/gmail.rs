@@ -151,9 +151,17 @@ fn real_runner(args: &[String]) -> Result<String, String> {
 #[derive(Debug, Clone)]
 pub struct GmailConnector {
     runner: Runner,
+    // Reserved: account identity this connector was built against (future multi-account routing).
+    #[allow(dead_code)]
     account: String,
     enabled: bool,
     disabled_reason: Option<String>,
+}
+
+impl Default for GmailConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GmailConnector {
@@ -227,7 +235,7 @@ impl GmailConnector {
         if q.len() > 200 {
             return Err("gmail.search: query too long (max 200 chars)".to_string());
         }
-        let n = max.unwrap_or(DEFAULT_MAX).min(HARD_MAX).max(1);
+        let n = max.unwrap_or(DEFAULT_MAX).clamp(1, HARD_MAX);
         let out = self.run(&[
             "gmail".into(),
             "+triage".into(),
