@@ -51,7 +51,7 @@ No detector-without-consumer found.
 
 ## 8. R-7
 
-`tests/governor_adversarial.rs` labeled PROPERTY SUITE (security invariants in implementation-free terms; never rewrite expectations without adversarial sign-off); `tests/equiv_turn_paths.rs` labeled CHANGE-DETECTION SUITE (pins exact cross-transport behavior incl. verbatim receipt formulas; behavior changes need adversarial sign-off on the new behavior).
+`tests/governor_adversarial.rs` labeled PROPERTY SUITE (security invariants in implementation-free terms; never rewrite expectations without adversarial sign-off); `tests/equiv_turn_paths.rs` labeled CHANGE-DETECTION SUITE (pins exact cross-transport behavior incl. verbatim receipt formulas; behavior changes need adversarial sign-off on the new behavior). Second sweep: `src/governor.rs` inline unit-test module labeled MIXED (flag-assertions are property; exact canned-substitution assertions are change-detection).
 
 ## 9. R-8
 
