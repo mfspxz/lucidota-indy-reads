@@ -1,3 +1,5 @@
+[Active R&D Lab] — latest CI run is failing; active development, expect rough edges.
+
 # Indy_Reads
 
 **Voice research agent where the AI generates hypotheses and language, but a
