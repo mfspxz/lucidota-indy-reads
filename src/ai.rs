@@ -12,8 +12,8 @@
 //! If ROUTER_KEY is unset, the client runs in deterministic fixture mode
 //! so the governor/UI demo survives provider failure.
 
-use indy_reads::governor::{AiProposal, Governor, ProviderOutcome, ProviderPolicy};
-use indy_reads::receipts::now_ms;
+use crate::governor::{AiProposal, Governor, ProviderOutcome, ProviderPolicy};
+use crate::receipts::now_ms;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::future::Future;
@@ -331,8 +331,8 @@ impl OpenAiCompatBackend {
             ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs,
         };
 
-        let system = indy_reads::tokens::truncate_to_budget(system_prompt, SYSTEM_BUDGET_TOKENS);
-        let user = indy_reads::prompts::render_user_turn(epistemic_hint, utterance);
+        let system = crate::tokens::truncate_to_budget(system_prompt, SYSTEM_BUDGET_TOKENS);
+        let user = crate::prompts::render_user_turn(epistemic_hint, utterance);
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
             .messages([
@@ -877,7 +877,7 @@ fn extract_json(text: &str) -> Option<String> {
 #[cfg(test)]
 mod failover_tests {
     use super::*;
-    use indy_reads::governor::{reconstruct_chain, verify_chain_linkage};
+    use crate::governor::{reconstruct_chain, verify_chain_linkage};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 

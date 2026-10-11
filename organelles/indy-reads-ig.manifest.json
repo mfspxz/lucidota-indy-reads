@@ -1,0 +1,65 @@
+{
+  "authority": {
+    "declared_valence": "candidate",
+    "granted_capabilities": [],
+    "mutation_class": "read_only",
+    "required_capability": null
+  },
+  "codon": "ig",
+  "contracts": [
+    {
+      "description": "Connector status: enabled or the disabled reason",
+      "input_schema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "op": "status"
+    },
+    {
+      "description": "Search mail with Gmail search syntax (fail-closed when disabled)",
+      "input_schema": {
+        "properties": {
+          "max": {
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "op": "search"
+    },
+    {
+      "description": "Read one message by id (fail-closed when disabled)",
+      "input_schema": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "op": "read"
+    }
+  ],
+  "description": "Fail-closed Gmail search and read via the gmail CLI",
+  "name": "indy-gmail",
+  "receipt_policy": {
+    "algorithm": "sha256",
+    "chain": true,
+    "content_addressed": true
+  },
+  "schema_version": "1",
+  "transports": [
+    "native"
+  ],
+  "version": "0.1.0"
+}

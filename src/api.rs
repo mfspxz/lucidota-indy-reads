@@ -6,7 +6,7 @@
 //! compared against the source it claims to be.
 pub const CONTRACT_VERSION: &str = "1";
 
-use crate::ai::AiClient;
+use indy_reads::ai::AiClient;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},

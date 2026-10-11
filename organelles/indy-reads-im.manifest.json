@@ -1,0 +1,68 @@
+{
+  "authority": {
+    "declared_valence": "candidate",
+    "granted_capabilities": [],
+    "mutation_class": "read_only",
+    "required_capability": null
+  },
+  "codon": "im",
+  "contracts": [
+    {
+      "description": "The MCP tool descriptor set",
+      "input_schema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "op": "tool_descriptors"
+    },
+    {
+      "description": "Strip forbidden args from a tool call; returns stripped names",
+      "input_schema": {
+        "properties": {
+          "args": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "args"
+        ],
+        "type": "object"
+      },
+      "op": "strip_forbidden"
+    },
+    {
+      "description": "Dispatch one MCP tool call (mutates claim/evidence/receipt state)",
+      "input_schema": {
+        "properties": {
+          "args": {
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "args"
+        ],
+        "type": "object"
+      },
+      "mutation_class": "write",
+      "op": "call_tool",
+      "required_capability": "im.write"
+    }
+  ],
+  "description": "MCP tool surface: descriptors, forbidden-arg stripping, governed dispatch",
+  "name": "indy-mcp",
+  "receipt_policy": {
+    "algorithm": "sha256",
+    "chain": true,
+    "content_addressed": true
+  },
+  "schema_version": "1",
+  "transports": [
+    "native"
+  ],
+  "version": "0.1.0"
+}

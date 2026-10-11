@@ -4,6 +4,7 @@
 //! server, and the MCP server are all thin transports over this core.
 //! No transport owns truth; the governor does.
 
+pub mod ai;
 pub mod alebex;
 pub mod avatar;
 pub mod diarize;
@@ -13,6 +14,7 @@ pub mod gmail;
 pub mod governor;
 pub mod mcp;
 pub mod mcp_stdio;
+pub mod organelles;
 pub mod prompts;
 pub mod receipts;
 pub mod store;

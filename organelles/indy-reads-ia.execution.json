@@ -1,0 +1,33 @@
+{
+  "execution_personality": {
+    "devices": "none",
+    "filesystem": {
+      "allowlist": [],
+      "mode": "none"
+    },
+    "network": "egress-https (provider lanes, key-gated)",
+    "platform": "linux-userland",
+    "process": "no-spawn",
+    "sandbox": "none",
+    "secrets": "none-required"
+  },
+  "kill_semantics": {
+    "kill": "drop in-flight; host emits final receipt",
+    "policy": "suspend-first per fabric doctrine",
+    "state": "stateful-in-memory (McpState / tokio runtime); suspend keeps state, kill drops it",
+    "suspend": "no-op (no persistent state; in-flight call may be dropped)"
+  },
+  "provenance": {
+    "build_source_commit": "<filled at registration>",
+    "manifest_hash_pinned_in_receipts": true,
+    "valence": "candidate (governed generation; fixture-deterministic without keys)"
+  },
+  "resource_envelope": {
+    "cpu_cores": 1,
+    "io": "none",
+    "memory_mb": 512,
+    "wall_time_s": 60
+  },
+  "codon": "ia",
+  "organelle": "indy-ai"
+}

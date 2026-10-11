@@ -5,7 +5,6 @@
 //!     -> validate -> response -> turn.state -> receipt
 //! Every step emits a hash-chained receipt. The receipt stream goes over WebSocket.
 
-mod ai;
 mod api;
 
 use governor::AppState;

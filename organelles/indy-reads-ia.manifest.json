@@ -1,0 +1,72 @@
+{
+  "authority": {
+    "declared_valence": "candidate",
+    "granted_capabilities": [],
+    "mutation_class": "read_only",
+    "required_capability": null
+  },
+  "codon": "ia",
+  "contracts": [
+    {
+      "description": "Load a persona system prompt (falls back to embedded Indy)",
+      "input_schema": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "op": "load_persona"
+    },
+    {
+      "description": "One governed turn: governor-selected provider, trail recorded",
+      "input_schema": {
+        "properties": {
+          "epistemic_hint": {
+            "type": "string"
+          },
+          "persona": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "requested": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "utterance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "utterance",
+          "epistemic_hint",
+          "persona",
+          "request_id",
+          "session_id"
+        ],
+        "type": "object"
+      },
+      "op": "interpret"
+    }
+  ],
+  "description": "Governed AI interpretation: provider selection, classified failover, fixture mode",
+  "name": "indy-ai",
+  "receipt_policy": {
+    "algorithm": "sha256",
+    "chain": true,
+    "content_addressed": true
+  },
+  "schema_version": "1",
+  "transports": [
+    "native"
+  ],
+  "version": "0.1.0"
+}

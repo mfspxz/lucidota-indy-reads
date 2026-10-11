@@ -1,0 +1,127 @@
+{
+  "authority": {
+    "declared_valence": "candidate",
+    "granted_capabilities": [],
+    "mutation_class": "read_only",
+    "required_capability": null
+  },
+  "codon": "iv",
+  "contracts": [
+    {
+      "description": "Label one dialogue turn as a speaker segment",
+      "input_schema": {
+        "properties": {
+          "ended_at_ms": {
+            "type": "integer"
+          },
+          "speaker_id": {
+            "type": "string"
+          },
+          "speaker_label": {
+            "type": "string"
+          },
+          "started_at_ms": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "speaker_id",
+          "speaker_label",
+          "text",
+          "started_at_ms",
+          "ended_at_ms"
+        ],
+        "type": "object"
+      },
+      "op": "diarize_turn"
+    },
+    {
+      "description": "Label raw PCM (array of i16 samples); honest single-speaker without a model",
+      "input_schema": {
+        "properties": {
+          "pcm": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "sample_rate": {
+            "type": "integer"
+          },
+          "started_at_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pcm",
+          "sample_rate",
+          "started_at_ms"
+        ],
+        "type": "object"
+      },
+      "op": "diarize_pcm"
+    },
+    {
+      "description": "Derive TTS prosody from epistemic status + intent + emotion",
+      "input_schema": {
+        "properties": {
+          "emotion": {
+            "type": "string"
+          },
+          "epistemic": {
+            "enum": [
+              "unknown",
+              "proven",
+              "disproven"
+            ],
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "persona": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "epistemic",
+          "intent",
+          "emotion",
+          "persona"
+        ],
+        "type": "object"
+      },
+      "op": "derive_voice"
+    },
+    {
+      "description": "Voice id for a persona",
+      "input_schema": {
+        "properties": {
+          "persona": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "persona"
+        ],
+        "type": "object"
+      },
+      "op": "voice_id"
+    }
+  ],
+  "description": "Honest single-mic diarization + epistemic prosody derivation",
+  "name": "indy-voice",
+  "receipt_policy": {
+    "algorithm": "sha256",
+    "chain": true,
+    "content_addressed": true
+  },
+  "schema_version": "1",
+  "transports": [
+    "native"
+  ],
+  "version": "0.1.0"
+}

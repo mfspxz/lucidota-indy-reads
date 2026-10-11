@@ -1,0 +1,98 @@
+{
+  "authority": {
+    "declared_valence": "candidate",
+    "granted_capabilities": [],
+    "mutation_class": "read_only",
+    "required_capability": null
+  },
+  "codon": "ie",
+  "contracts": [
+    {
+      "description": "Generate a receipt/claim id",
+      "input_schema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "op": "new_id"
+    },
+    {
+      "description": "sha256 hex of a string",
+      "input_schema": {
+        "properties": {
+          "s": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "s"
+        ],
+        "type": "object"
+      },
+      "op": "hash_str"
+    },
+    {
+      "description": "Build one receipt via the fluent builder",
+      "input_schema": {
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "epistemic": {
+            "type": "string"
+          },
+          "input": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "prev_hash": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request_id",
+          "session_id",
+          "actor",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "op": "build"
+    }
+  ],
+  "description": "Receipt construction: ids, content hashes, fluent receipt builder",
+  "name": "indy-receipts",
+  "receipt_policy": {
+    "algorithm": "sha256",
+    "chain": true,
+    "content_addressed": true
+  },
+  "schema_version": "1",
+  "transports": [
+    "native"
+  ],
+  "version": "0.1.0"
+}
